@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+<title>Finanzas Personales</title>
+<link rel="manifest" href="manifest.json" />
+<link rel="icon" href="icon.png" />
+<meta name="theme-color" content="#2f9e44" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js" defer></script>
+<style>
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:'Segoe UI',Roboto,-apple-system,sans-serif; color:#233029; background:#e9edea; }
+  #app { max-width:480px; margin:0 auto; min-height:100vh; background:#fff; box-shadow:0 0 12px rgba(0,0,0,.06); }
+  .fin-num { font-variant-numeric: tabular-nums; }
+  .fin-topbar { display:flex; background:#eef1ee; }
+  .fin-pill { flex:1; display:flex; flex-direction:column; align-items:center; gap:6px; padding:12px 6px 9px;
+    border:none; background:transparent; cursor:pointer; border-bottom:3px solid transparent; }
+  .fin-pill.active { background:#fff; }
+  .fin-pill-ic { width:36px; height:36px; border-radius:50%; display:flex; align-items:center; justify-content:center; color:#fff; font-size:16px; }
+  .fin-pill-label { font-size:12.5px; font-weight:600; color:#3a473f; }
+  .fin-monthbar { display:flex; align-items:center; justify-content:space-between; background:#2f9e44; color:#fff;
+    padding:9px 16px; font-size:14px; font-weight:600; }
+  .fin-monthbar button { background:transparent; border:none; color:#fff; cursor:pointer; font-size:17px; }
+  .fin-monthbar .side { font-size:12px; opacity:.85; cursor:pointer; }
+  .fin-body { padding:16px 18px 30px; }
+  .fin-summary { background:#fafcfa; border:1px solid #e7ece7; border-radius:10px; padding:14px 16px; margin-bottom:14px; }
+  .fin-summary-row { display:flex; justify-content:space-between; padding:6px 0; font-size:14.5px; }
+  .fin-summary-row.total { border-top:1px dashed #d7ded7; margin-top:4px; padding-top:10px; font-weight:700; }
+  .fin-actions { display:flex; gap:8px; margin-bottom:14px; }
+  .fin-actbtn { flex:1; display:flex; flex-direction:column; align-items:center; gap:5px; padding:10px 6px;
+    background:#f2f4f2; border:none; border-radius:10px; cursor:pointer; font-size:12px; font-weight:600; color:#3a473f; }
+  .fin-actbtn .ic { width:34px; height:34px; border-radius:50%; display:flex; align-items:center; justify-content:center; color:#fff; font-size:17px; }
+  .fin-cal { border:1px solid #eef1ee; border-radius:10px; overflow:hidden; margin-bottom:14px; }
+  .fin-cal-head, .fin-cal-row { display:grid; grid-template-columns:repeat(7,1fr); }
+  .fin-cal-head { background:#f6f8f6; }
+  .fin-cal-head div { text-align:center; padding:7px 0; font-size:12px; font-weight:700; color:#2f9e44; }
+  .fin-cal-cell { position:relative; text-align:center; padding:9px 0; font-size:13px; cursor:pointer; border-top:1px solid #f2f4f2; }
+  .fin-cal-cell.today { background:#fff6d8; font-weight:700; }
+  .fin-cal-cell.selected { outline:2px solid #2f9e44; outline-offset:-2px; border-radius:6px; }
+  .fin-cal-cell .dots { position:absolute; bottom:2px; left:0; right:0; display:flex; justify-content:center; gap:3px; }
+  .fin-dot { width:5px; height:5px; border-radius:50%; display:inline-block; }
+  .fin-legend { display:flex; gap:16px; justify-content:center; padding:8px 0; font-size:11.5px; color:#5c6b62; background:#fafcfa; flex-wrap:wrap; }
+  .fin-legend span { display:inline-flex; align-items:center; gap:5px; }
+  .fin-txlist-head { display:flex; align-items:center; gap:8px; background:#eef7ee; color:#1f7a3e; font-weight:700;
+    padding:9px 14px; font-size:13px; border-radius:8px 8px 0 0; }
+  .fin-txcard { display:flex; align-items:center; justify-content:space-between; padding:11px 12px; border:1px solid #eef1ee; border-top:none; background:#fff; }
+  .fin-txcard:last-child { border-radius:0 0 8px 8px; }
+  .fin-txleft { display:flex; align-items:center; gap:11px; }
+  .fin-txic { width:34px; height:34px; border-radius:9px; display:flex; align-items:center; justify-content:center; color:#fff; flex-shrink:0; font-size:16px; }
+  .fin-txname { font-size:13.5px; font-weight:700; }
+  .fin-txnote { font-size:11.5px; color:#8a978f; }
+  .fin-empty { text-align:center; padding:26px 10px; color:#8a978f; font-size:13px; }
+  .fin-bar-row { display:flex; align-items:center; gap:10px; padding:9px 0; border-bottom:1px solid #f2f4f2; }
+  .fin-bar-ic { width:30px; height:30px; border-radius:8px; display:flex; align-items:center; justify-content:center; color:#fff; flex-shrink:0; font-size:15px; }
+  .fin-bar-track { flex:1; }
+  .fin-bar-name { font-size:12.5px; font-weight:600; margin-bottom:3px; display:flex; justify-content:space-between; }
+  .fin-bar-bg { background:#eef1ee; border-radius:6px; height:20px; overflow:hidden; }
+  .fin-bar-fill { height:100%; display:flex; align-items:center; padding-left:8px; color:#fff; font-size:11px; font-weight:700; border-radius:6px; white-space:nowrap; }
+  .fin-secnav { display:flex; gap:6px; padding:10px 18px 0; flex-wrap:wrap; }
+  .fin-secbtn { display:flex; align-items:center; gap:6px; padding:8px 14px; border-radius:20px; border:1.5px solid #e7ece7;
+    background:#fff; font-size:12.5px; font-weight:600; color:#5c6b62; cursor:pointer; }
+  .fin-secbtn.active { background:#233029; color:#fff; border-color:#233029; }
+  .fin-card { background:#fafcfa; border:1px solid #e7ece7; border-radius:10px; padding:14px 16px; margin-bottom:14px; }
+  .fin-label { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:#7a877e; font-weight:700; }
+  .fin-kpi { background:#fafcfa; border:1px solid #e7ece7; border-left:4px solid #2f9e44; border-radius:8px; padding:12px 14px; }
+  .fin-kpi.neg { border-left-color:#c0392b; }
+  .fin-kpi.gold { border-left-color:#e08e19; }
+  .fin-value { font-size:19px; font-weight:800; margin-top:3px; }
+  .fin-input, .fin-select { border:1.5px solid #dfe6df; background:#fff; border-radius:8px; padding:9px 11px; font-size:14px; width:100%; font-family:inherit; }
+  .fin-btn { display:inline-flex; align-items:center; gap:6px; background:#233029; color:#fff; border:none; border-radius:8px;
+    padding:10px 16px; font-weight:700; font-size:13px; cursor:pointer; }
+  .fin-btn.ghost { background:transparent; color:#c0392b; padding:6px 8px; }
+  .fin-btn.outline { background:#fff; color:#233029; border:1.5px solid #dfe6df; }
+  .fin-swatch { width:26px; height:26px; border-radius:7px; cursor:pointer; border:2px solid transparent; display:inline-block; }
+  .fin-swatch.sel { border-color:#233029; }
+  .fin-iconpick { width:34px; height:34px; border-radius:8px; display:flex; align-items:center; justify-content:center;
+    background:#f2f4f2; cursor:pointer; border:2px solid transparent; font-size:16px; }
+  .fin-iconpick.sel { border-color:#233029; background:#e7ebe7; }
+  .fin-modal-overlay { position:fixed; inset:0; background:rgba(20,30,24,.45); display:flex; align-items:center; justify-content:center; z-index:60; padding:14px; }
+  .fin-modal { background:#fff; border-radius:14px; width:min(420px,100%); max-height:88vh; overflow:auto; }
+  .fin-modal-head { display:flex; align-items:center; justify-content:space-between; padding:16px 18px; color:#fff; }
+  .fin-modal-body { padding:18px; }
+  .fin-modal-foot { display:flex; border-top:1px solid #eef1ee; }
+  .fin-modal-foot button { flex:1; padding:14px; border:none; background:#fff; font-weight:700; font-size:14px; cursor:pointer; }
+  .fin-modal-foot button.save { background:#233029; color:#fff; }
+  .fin-toast { position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:#233029; color:#fff;
+    padding:10px 18px; border-radius:8px; font-size:13px; z-index:70; }
+  .fin-loading { padding:60px 20px; text-align:center; color:#7a877e; }
+  .cat-row { display:flex; justify-content:space-between; align-items:center; padding:9px 0; border-bottom:1px solid #f2f4f2; }
+</style>
+</head>
+<body>
+  <div id="app"><div class="fin-loading">Cargando tus datos…</div></div>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
