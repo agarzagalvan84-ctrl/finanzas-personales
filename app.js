@@ -443,9 +443,9 @@ function renderTopBar() {
 }
 function pillBtn(tab, label, color, emoji) {
   const active = STATE.mainTab === tab;
-  return `<button class="fin-pill ${active ? 'active' : ''}" onclick="setMainTab('${tab}')">
-    <div class="fin-pill-ic" style="background:${active ? color : '#c9d6cc'}">${emoji}</div>
-    <div class="fin-pill-label" style="color:${active ? color : '#7a877e'}">${label}</div>
+  return `<button class="fin-pill ${active ? 'active' : ''}" style="border-bottom-color:${active ? color : 'transparent'}" onclick="setMainTab('${tab}')">
+    <div class="fin-pill-ic" style="background:${color}">${emoji}</div>
+    <div class="fin-pill-label" style="color:${active ? color : '#3a473f'}">${label}</div>
   </button>`;
 }
 function renderSecNav() {
@@ -498,12 +498,12 @@ function renderSaldo() {
   const pctOut = total ? (gastos / total) * 100 : 50;
 
   let html = `<div class="fin-balance-row">
-    <button class="fin-balance-btn in" onclick="openTxModal('ingreso')">+</button>
+    <button class="fin-balance-btn in" onclick="openTxModal('ingreso')"></button>
     <div class="fin-balance-bar">
       <div class="fin-balance-fill in" style="width:${pctIn}%"></div>
       <div class="fin-balance-fill out" style="width:${pctOut}%"></div>
     </div>
-    <button class="fin-balance-btn out" onclick="openTxModal('gasto')">−</button>
+    <button class="fin-balance-btn out" onclick="openTxModal('gasto')"></button>
   </div>`;
 
   html += `<div class="fin-summary">
@@ -563,6 +563,14 @@ function renderSaldo() {
       </div>
     </div>`;
   });
+  const dayIn = dayTx.filter((t) => t.moneda !== 'USD' && t.tipo === 'ingreso').reduce((s, t) => s + Number(t.monto), 0);
+  const dayOut = dayTx.filter((t) => t.moneda !== 'USD' && t.tipo === 'gasto').reduce((s, t) => s + Number(t.monto), 0);
+  const daySaldo = dayIn - dayOut;
+  if (dayTx.length > 0) {
+    html += `<div class="fin-summary-row total" style="background:#fafcfa;border:1px solid #eef1ee;border-top:none;padding:10px 14px;margin:0;">
+      <span>Saldo del día</span><span class="fin-num" style="color:${daySaldo >= 0 ? '#233029' : '#c0392b'}">${fmt(daySaldo)}</span>
+    </div>`;
+  }
   html += `<div class="fin-daynav">
     <button onclick="dayShift(-1)">‹ ${shortDateLabel(addDaysISO(STATE.selectedDay, -1))}</button>
     <button onclick="dayShift(1)">${shortDateLabel(addDaysISO(STATE.selectedDay, 1))} ›</button>
