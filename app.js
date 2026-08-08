@@ -45,14 +45,14 @@ function escapeHtml(s) {
 
 /* ---------------- íconos / colores ---------------- */
 const ICONS = {
-  home: '🏠', car: '🚗', phone: '📱', food: '🍽️', fun: '🎮', users: '👥', fuel: '⛽',
-  cart: '🛒', school: '🎓', health: '❤️', gift: '🎁', bank: '🏦', coins: '🪙', piggy: '🐷',
-  wallet: '👛', briefcase: '💼', percent: '%', hand: '🤝', cash: '💵', building: '🏢', tag: '🏷️',
+  home: '🏠', car: '🚗', phone: '📱', food: '🍔', fun: '🎮', users: '👨‍👩‍👧', fuel: '⛽',
+  cart: '🛍️', school: '📚', health: '🩺', gift: '🎁', bank: '🏦', coins: '🪙', piggy: '🐷',
+  wallet: '💳', briefcase: '💼', percent: '🧾', hand: '🤝', cash: '💵', building: '🏢', tag: '🏷️',
 };
 const ICON_KEYS = Object.keys(ICONS);
 function iconEmoji(k) { return ICONS[k] || '🏷️'; }
 
-const COLORS = ['#2F6FE0', '#E0357A', '#3AA0C9', '#C0392B', '#1F7A3E', '#6DBF4B', '#E08E19', '#2E8F87', '#8A5A2E', '#7A4EC9', '#C9A227', '#4E5D78'];
+const COLORS = ['#4C8DFF', '#F0508F', '#4FC3E8', '#E85A4E', '#33A65C', '#8ED45F', '#F2A73B', '#3DB5AC', '#C98A4B', '#9B72E0', '#E0C04A', '#6B7FA0'];
 
 /* ---------------- estado ---------------- */
 let STATE = {
@@ -189,7 +189,13 @@ async function cajaMover(moneda, tipo, monto, nota) {
 }
 
 /* ---------------- navegación ---------------- */
-function setMainTab(tab) { STATE.mainTab = tab; render(); }
+function setMainTab(tab) {
+  STATE.mainTab = tab;
+  STATE.secTab = null;
+  STATE.month = ymKey(new Date());
+  STATE.selectedDay = todayISO();
+  render();
+}
 function setSecTab(tab) { STATE.secTab = tab || null; render(); }
 function monthShift(delta) { STATE.month = addMonths(STATE.month, delta); render(); }
 function selectDay(d) { STATE.selectedDay = d; render(); }
