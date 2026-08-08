@@ -499,13 +499,11 @@ function renderSaldo() {
       const classes = ['fin-cal-cell'];
       if (d === todayISO()) classes.push('today');
       if (d === STATE.selectedDay) classes.push('selected');
-      const inSum = dayIngresoSum(d);
-      const outSum = dayGastoSum(d);
       html += `<div class="${classes.join(' ')}" onclick="selectDay('${d}')">
-        <div class="fin-cal-daynum">${parseInt(d.slice(8), 10)}</div>
-        <div class="fin-cal-sums">
-          ${inSum > 0 ? `<div class="fin-cal-sum in">+${fmtCompact(inSum)}</div>` : ''}
-          ${outSum > 0 ? `<div class="fin-cal-sum out">-${fmtCompact(outSum)}</div>` : ''}
+        ${parseInt(d.slice(8), 10)}
+        <div class="dots">
+          ${dayHasIngreso(d) ? '<span class="fin-dot" style="background:#2f9e44"></span>' : ''}
+          ${dayHasGasto(d) ? '<span class="fin-dot" style="background:#c0392b"></span>' : ''}
         </div>
       </div>`;
     });
@@ -513,9 +511,9 @@ function renderSaldo() {
   });
   html += '</div>';
   html += `<div class="fin-legend">
-    <span><span class="fin-dot" style="background:#2f9e44"></span> Ingresos del día</span>
+    <span><span class="fin-dot" style="background:#2f9e44"></span> Día con ingresos</span>
     <span><span class="fin-dot" style="background:#f5d565"></span> Hoy</span>
-    <span><span class="fin-dot" style="background:#c0392b"></span> Gastos del día</span>
+    <span><span class="fin-dot" style="background:#c0392b"></span> Día con gastos</span>
   </div>`;
 
   const dayTx = getDayTx();
