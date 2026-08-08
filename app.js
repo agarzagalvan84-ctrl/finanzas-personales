@@ -46,13 +46,13 @@ function escapeHtml(s) {
 /* ---------------- íconos / colores ---------------- */
 const ICONS = {
   home: '🏠', car: '🚗', phone: '📱', food: '🍔', fun: '🎮', users: '👨‍👩‍👧', fuel: '⛽',
-  cart: '🛍️', school: '📚', health: '🩺', gift: '🎁', bank: '🏦', coins: '🪙', piggy: '🐷',
+  cart: '🛒', school: '🎓', health: '🩺', gift: '🎁', bank: '🏦', coins: '🪙', piggy: '🐷',
   wallet: '💳', briefcase: '💼', percent: '🧾', hand: '🤝', cash: '💵', building: '🏢', tag: '🏷️',
 };
 const ICON_KEYS = Object.keys(ICONS);
 function iconEmoji(k) { return ICONS[k] || '🏷️'; }
 
-const COLORS = ['#4C8DFF', '#F0508F', '#4FC3E8', '#E85A4E', '#33A65C', '#8ED45F', '#F2A73B', '#3DB5AC', '#C98A4B', '#9B72E0', '#E0C04A', '#6B7FA0'];
+const COLORS = ['#5AC8FA', '#FF6FA5', '#5ED9C4', '#FF7F6B', '#8BD46E', '#B6E85A', '#FFC24B', '#4FD8D0', '#FFB366', '#B98CF2', '#FFDA4D', '#7C9CE0'];
 
 /* ---------------- estado ---------------- */
 let STATE = {
@@ -373,7 +373,7 @@ function pillBtn(tab, label, color, emoji) {
   </button>`;
 }
 function renderSecNav() {
-  const items = [['', '📅 Día a día'], ['reportes', '📊 Reportes'], ['caja', '👛 Caja chica'], ['categorias', '⚙️ Categorías']];
+  const items = [['', '📅 Día a día'], ['reportes', '📊 Reportes'], ['caja', '🔐 Caja chica'], ['categorias', '⚙️ Categorías']];
   let html = '<div class="fin-secnav">' + items.map(([tab, label]) => {
     const active = (STATE.secTab || '') === tab;
     return `<button class="fin-secbtn ${active ? 'active' : ''}" onclick="setSecTab('${tab}')">${label}</button>`;
