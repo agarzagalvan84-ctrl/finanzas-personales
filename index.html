@@ -109,11 +109,19 @@
     padding:10px 18px; border-radius:8px; font-size:13px; z-index:70; }
   .fin-loading { padding:60px 20px; text-align:center; color:#7a877e; }
   .cat-row { display:flex; justify-content:space-between; align-items:center; padding:9px 0; border-bottom:1px solid #f2f4f2; }
+  .fin-refresh-btn { position:fixed; top:10px; right:10px; z-index:80; width:34px; height:34px; border-radius:50%;
+    background:#233029; color:#fff; border:none; font-size:16px; display:flex; align-items:center; justify-content:center;
+    box-shadow:0 2px 6px rgba(0,0,0,.25); cursor:pointer; }
 </style>
 </head>
 <body>
+  <button class="fin-refresh-btn" title="Actualizar app" onclick="location.href = location.pathname + '?v=' + Date.now();">🔄</button>
   <div id="app"><div class="fin-loading">Cargando tus datos…</div></div>
-  <script src="config.js"></script>
-  <script src="app.js"></script>
+  <script>
+    // Evita que iOS/Safari sirva versiones viejas en caché de estos dos archivos.
+    var __v = Date.now();
+    document.write('<scr' + 'ipt src="config.js?v=' + __v + '"></scr' + 'ipt>');
+    document.write('<scr' + 'ipt src="app.js?v=' + __v + '"></scr' + 'ipt>');
+  </script>
 </body>
 </html>
