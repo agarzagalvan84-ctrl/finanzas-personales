@@ -41,6 +41,14 @@ function addDaysISO(iso, delta) {
   const dt = new Date(y, m - 1, d + delta);
   return `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}`;
 }
+function weekRangeOf(iso) {
+  const [y, m, d] = iso.split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  const dow = (dt.getDay() + 6) % 7; // lunes = 0
+  const start = addDaysISO(iso, -dow);
+  const end = addDaysISO(iso, 6 - dow);
+  return [start, end];
+}
 function shortDateLabel(iso) {
   const [y, m, d] = iso.split('-').map(Number);
   return `${MONTHS_SHORT[m - 1]}. ${d}`;
@@ -72,7 +80,7 @@ const COLORS = ['#5AC8FA', '#FF6FA5', '#5ED9C4', '#FF7F6B', '#8BD46E', '#B6E85A'
 /* ---------------- estado ---------------- */
 let STATE = {
   transactions: [], catIngreso: [], catGasto: [], caja: { mxn: 0, usd: 0 }, cajaLog: [],
-  loaded: false, mainTab: 'saldo', secTab: null, month: ymKey(new Date()), selectedDay: todayISO(),
+  loaded: false, mainTab: 'saldo', secTab: null, month: ymKey(new Date()), selectedDay: todayISO(), statsPeriod: 'mes',
 };
 let catFormTipo = 'gasto', catFormIcon = ICON_KEYS[0], catFormColor = COLORS[0], catFormNombreDraft = '', catEditingId = null;
 let uiCajaEditMoneda = null, uiCajaMoveModal = null;
@@ -218,6 +226,24 @@ function dayShift(delta) {
   STATE.selectedDay = addDaysISO(STATE.selectedDay, delta);
   STATE.month = monthKeyFromDate(STATE.selectedDay);
   render();
+}
+function setStatsPeriod(p) { STATE.statsPeriod = p; render(); }
+function getPeriodTx(tipo) {
+  const period = STATE.statsPeriod;
+  if (period === 'semana') {
+    const [start, end] = weekRangeOf(STATE.selectedDay);
+    return STATE.transactions.filter((t) => t.tipo === tipo && fechaKey(t.fecha) >= start && fechaKey(t.fecha) <= end);
+  }
+  if (period === 'ano') {
+    const year = STATE.month.slice(0, 4);
+    return STATE.transactions.filter((t) => t.tipo === tipo && fechaKey(t.fecha).slice(0, 4) === year);
+  }
+  return STATE.transactions.filter((t) => t.tipo === tipo && monthKeyFromDate(t.fecha) === STATE.month);
+}
+function periodLabel() {
+  if (STATE.statsPeriod === 'semana') { const [s, e] = weekRangeOf(STATE.selectedDay); return `semana del ${shortDateLabel(s)} al ${shortDateLabel(e)}`; }
+  if (STATE.statsPeriod === 'ano') return `año ${STATE.month.slice(0, 4)}`;
+  return monthLabelLong(STATE.month);
 }
 function getMonthTx() { return STATE.transactions.filter((t) => monthKeyFromDate(t.fecha) === STATE.month); }
 function getDayTx() { return STATE.transactions.filter((t) => fechaKey(t.fecha) === STATE.selectedDay).sort((a, b) => (a.tipo < b.tipo ? -1 : 1)); }
@@ -560,6 +586,19 @@ function renderCategoriaBars(tipo) {
   let html = `<div class="fin-actions">
     <button class="fin-actbtn" onclick="openTxModal('${tipo}')"><div class="ic" style="background:${colorMain}">+</div>${tipo === 'ingreso' ? 'Añadir ingreso' : 'Añadir gasto'}</button>
   </div>`;
+
+  const periodTx = getPeriodTx(tipo).filter((t) => t.moneda !== 'USD');
+  const periodTotal = periodTx.reduce((s, t) => s + Number(t.monto), 0);
+  html += `<div class="fin-card">
+    <div class="fin-label" style="margin-bottom:8px;">Total de ${tipo === 'ingreso' ? 'ingresos' : 'gastos'} · ${periodLabel()}</div>
+    <div style="display:flex;gap:6px;margin-bottom:10px;">
+      <button class="fin-secbtn ${STATE.statsPeriod === 'semana' ? 'active' : ''}" onclick="setStatsPeriod('semana')">Semana</button>
+      <button class="fin-secbtn ${STATE.statsPeriod === 'mes' ? 'active' : ''}" onclick="setStatsPeriod('mes')">Mes</button>
+      <button class="fin-secbtn ${STATE.statsPeriod === 'ano' ? 'active' : ''}" onclick="setStatsPeriod('ano')">Año</button>
+    </div>
+    <div class="fin-value" style="color:${colorMain}">${fmt(periodTotal)}</div>
+  </div>`;
+
   html += `<div class="fin-card"><div class="fin-label" style="margin-bottom:8px;">Distribución por categoría · ${tipo === 'ingreso' ? 'ingresos' : 'gastos'} del mes</div>`;
   if (byCat.length === 0) {
     html += `<div class="fin-empty">Este mes aún no hay transacciones de ${tipo === 'ingreso' ? 'ingresos' : 'gastos'}. En cuanto empieces a añadir, este gráfico estará disponible con los detalles resumidos.</div>`;
