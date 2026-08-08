@@ -498,12 +498,12 @@ function renderSaldo() {
   const pctOut = total ? (gastos / total) * 100 : 50;
 
   let html = `<div class="fin-balance-row">
-    <button class="fin-balance-btn in" onclick="openTxModal('ingreso')"></button>
+    <div class="fin-balance-btn in"></div>
     <div class="fin-balance-bar">
       <div class="fin-balance-fill in" style="width:${pctIn}%"></div>
       <div class="fin-balance-fill out" style="width:${pctOut}%"></div>
     </div>
-    <button class="fin-balance-btn out" onclick="openTxModal('gasto')"></button>
+    <div class="fin-balance-btn out"></div>
   </div>`;
 
   html += `<div class="fin-summary">
@@ -605,6 +605,7 @@ function renderCategoriaBars(tipo) {
       <button class="fin-secbtn ${STATE.statsPeriod === 'ano' ? 'active' : ''}" onclick="setStatsPeriod('ano')">Año</button>
     </div>
     <div class="fin-value" style="color:${colorMain}">${fmt(periodTotal)}</div>
+    <div style="font-size:11.5px;color:#8a978f;margin-top:3px;">${periodTx.length} ${periodTx.length === 1 ? 'movimiento' : 'movimientos'}</div>
   </div>`;
 
   html += `<div class="fin-card"><div class="fin-label" style="margin-bottom:8px;">Distribución por categoría · ${tipo === 'ingreso' ? 'ingresos' : 'gastos'} del mes</div>`;
