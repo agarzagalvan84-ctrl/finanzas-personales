@@ -430,8 +430,14 @@ function openTxModal(tipo, existingId) {
 function render() {
   const root = document.getElementById('app');
   if (!STATE.loaded) { root.innerHTML = '<div class="fin-loading">Cargando tus datos…</div>'; return; }
-  root.innerHTML = renderTopBar() + renderSecNav() + '<div class="fin-body">' + renderBody() + '</div>';
+  root.innerHTML = renderHeader() + renderTopBar() + renderSecNav() + '<div class="fin-body">' + renderBody() + '</div>';
   if (STATE.secTab === 'reportes') drawTrendChart();
+}
+function renderHeader() {
+  return `<div class="fin-header">
+    <span>💰 Finanzas Personales</span>
+    <button class="fin-refresh-btn" title="Actualizar app" onclick="location.href = location.pathname + '?v=' + Date.now();">🔄</button>
+  </div>`;
 }
 
 function renderTopBar() {
