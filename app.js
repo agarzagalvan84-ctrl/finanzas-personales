@@ -443,9 +443,9 @@ function renderTopBar() {
 }
 function pillBtn(tab, label, color, emoji) {
   const active = STATE.mainTab === tab;
-  return `<button class="fin-pill ${active ? 'active' : ''}" style="border-bottom-color:${active ? color : 'transparent'}" onclick="setMainTab('${tab}')">
+  return `<button class="fin-pill ${active ? 'active' : ''}" style="border-bottom-color:${active ? '#fff' : 'transparent'}" onclick="setMainTab('${tab}')">
     <div class="fin-pill-ic" style="background:${color}">${emoji}</div>
-    <div class="fin-pill-label" style="color:${active ? color : '#3a473f'}">${label}</div>
+    <div class="fin-pill-label" style="color:#fff;opacity:${active ? '1' : '.8'}">${label}</div>
   </button>`;
 }
 function renderSecNav() {
