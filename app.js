@@ -9,7 +9,8 @@
 function pad2(n) { return String(n).padStart(2, '0'); }
 function todayISO() { return new Date().toISOString().slice(0, 10); }
 function ymKey(d) { return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`; }
-function monthKeyFromDate(iso) { return iso.slice(0, 7); }
+function monthKeyFromDate(iso) { return String(iso).slice(0, 7); }
+function fechaKey(f) { return String(f).slice(0, 10); }
 const DOW = ['Lu', 'Ma', 'Mi', 'Ju', 'Vi', 'Sa', 'Do'];
 const MONTHS = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
 const MONTHS_SHORT = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
@@ -219,7 +220,7 @@ function dayShift(delta) {
   render();
 }
 function getMonthTx() { return STATE.transactions.filter((t) => monthKeyFromDate(t.fecha) === STATE.month); }
-function getDayTx() { return STATE.transactions.filter((t) => t.fecha === STATE.selectedDay).sort((a, b) => (a.tipo < b.tipo ? -1 : 1)); }
+function getDayTx() { return STATE.transactions.filter((t) => fechaKey(t.fecha) === STATE.selectedDay).sort((a, b) => (a.tipo < b.tipo ? -1 : 1)); }
 
 /* ---------------- categorías: form draft ---------------- */
 function saveCatNombreDraft() { const el = document.getElementById('nuevaCatNombre'); if (el) catFormNombreDraft = el.value; }
@@ -301,7 +302,7 @@ function openTxModal(tipo, existingId) {
   const draft = {
     id: existing ? existing.id : null,
     tipo, monto: existing ? String(existing.monto) : '', moneda: existing ? existing.moneda : 'MXN',
-    fecha: existing ? existing.fecha : STATE.selectedDay, categoriaId: existing ? existing.categoriaId : '', nota: existing ? existing.nota : '',
+    fecha: existing ? fechaKey(existing.fecha) : STATE.selectedDay, categoriaId: existing ? existing.categoriaId : '', nota: existing ? existing.nota : '',
   };
   let showPicker = false;
   let submitting = false;
@@ -461,10 +462,10 @@ function renderSaldo() {
   const gastos = monthTx.filter((t) => t.tipo === 'gasto' && t.moneda !== 'USD').reduce((s, t) => s + Number(t.monto), 0);
   const saldo = ingresos - gastos;
   const weeks = buildCalendarWeeks(STATE.month);
-  const dayHasIngreso = (d) => monthTx.some((t) => t.fecha === d && t.tipo === 'ingreso');
-  const dayHasGasto = (d) => monthTx.some((t) => t.fecha === d && t.tipo === 'gasto');
-  const dayIngresoSum = (d) => monthTx.filter((t) => t.fecha === d && t.tipo === 'ingreso' && t.moneda !== 'USD').reduce((s, t) => s + Number(t.monto), 0);
-  const dayGastoSum = (d) => monthTx.filter((t) => t.fecha === d && t.tipo === 'gasto' && t.moneda !== 'USD').reduce((s, t) => s + Number(t.monto), 0);
+  const dayHasIngreso = (d) => monthTx.some((t) => fechaKey(t.fecha) === d && t.tipo === 'ingreso');
+  const dayHasGasto = (d) => monthTx.some((t) => fechaKey(t.fecha) === d && t.tipo === 'gasto');
+  const dayIngresoSum = (d) => monthTx.filter((t) => fechaKey(t.fecha) === d && t.tipo === 'ingreso' && t.moneda !== 'USD').reduce((s, t) => s + Number(t.monto), 0);
+  const dayGastoSum = (d) => monthTx.filter((t) => fechaKey(t.fecha) === d && t.tipo === 'gasto' && t.moneda !== 'USD').reduce((s, t) => s + Number(t.monto), 0);
 
   const total = ingresos + gastos;
   const pctIn = total ? (ingresos / total) * 100 : 50;
