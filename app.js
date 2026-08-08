@@ -35,6 +35,20 @@ function buildCalendarWeeks(ymk) {
   for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
   return weeks;
 }
+function addDaysISO(iso, delta) {
+  const [y, m, d] = iso.split('-').map(Number);
+  const dt = new Date(y, m - 1, d + delta);
+  return `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}`;
+}
+function shortDateLabel(iso) {
+  const [y, m, d] = iso.split('-').map(Number);
+  return `${MONTHS_SHORT[m - 1]}. ${d}`;
+}
+function fmtCompact(n) {
+  const v = Math.abs(Number(n) || 0);
+  if (v >= 1000) return Math.round(v / 1000) + 'k';
+  return String(Math.round(v));
+}
 function fmt(n, currency) {
   currency = currency === 'USD' ? 'USD' : 'MXN';
   return new Intl.NumberFormat('es-MX', { style: 'currency', currency, maximumFractionDigits: 2 }).format(Number(n) || 0);
@@ -199,6 +213,11 @@ function setMainTab(tab) {
 function setSecTab(tab) { STATE.secTab = tab || null; render(); }
 function monthShift(delta) { STATE.month = addMonths(STATE.month, delta); render(); }
 function selectDay(d) { STATE.selectedDay = d; render(); }
+function dayShift(delta) {
+  STATE.selectedDay = addDaysISO(STATE.selectedDay, delta);
+  STATE.month = monthKeyFromDate(STATE.selectedDay);
+  render();
+}
 function getMonthTx() { return STATE.transactions.filter((t) => monthKeyFromDate(t.fecha) === STATE.month); }
 function getDayTx() { return STATE.transactions.filter((t) => t.fecha === STATE.selectedDay).sort((a, b) => (a.tipo < b.tipo ? -1 : 1)); }
 
@@ -444,8 +463,23 @@ function renderSaldo() {
   const weeks = buildCalendarWeeks(STATE.month);
   const dayHasIngreso = (d) => monthTx.some((t) => t.fecha === d && t.tipo === 'ingreso');
   const dayHasGasto = (d) => monthTx.some((t) => t.fecha === d && t.tipo === 'gasto');
+  const dayIngresoSum = (d) => monthTx.filter((t) => t.fecha === d && t.tipo === 'ingreso' && t.moneda !== 'USD').reduce((s, t) => s + Number(t.monto), 0);
+  const dayGastoSum = (d) => monthTx.filter((t) => t.fecha === d && t.tipo === 'gasto' && t.moneda !== 'USD').reduce((s, t) => s + Number(t.monto), 0);
 
-  let html = `<div class="fin-summary">
+  const total = ingresos + gastos;
+  const pctIn = total ? (ingresos / total) * 100 : 50;
+  const pctOut = total ? (gastos / total) * 100 : 50;
+
+  let html = `<div class="fin-balance-row">
+    <button class="fin-balance-btn in" onclick="openTxModal('ingreso')">+</button>
+    <div class="fin-balance-bar">
+      <div class="fin-balance-fill in" style="width:${pctIn}%"></div>
+      <div class="fin-balance-fill out" style="width:${pctOut}%"></div>
+    </div>
+    <button class="fin-balance-btn out" onclick="openTxModal('gasto')">−</button>
+  </div>`;
+
+  html += `<div class="fin-summary">
     <div class="fin-summary-row"><span>Ingresos</span><span class="fin-num" style="color:#2f9e44;font-weight:700;">${fmt(ingresos)}</span></div>
     <div class="fin-summary-row"><span>Gastos</span><span class="fin-num" style="color:#c0392b;font-weight:700;">${fmt(gastos)}</span></div>
     <div class="fin-summary-row total"><span>Saldo</span><span class="fin-num" style="color:${saldo >= 0 ? '#233029' : '#c0392b'}">${fmt(saldo)}</span></div>
@@ -464,11 +498,13 @@ function renderSaldo() {
       const classes = ['fin-cal-cell'];
       if (d === todayISO()) classes.push('today');
       if (d === STATE.selectedDay) classes.push('selected');
+      const inSum = dayIngresoSum(d);
+      const outSum = dayGastoSum(d);
       html += `<div class="${classes.join(' ')}" onclick="selectDay('${d}')">
-        ${parseInt(d.slice(8), 10)}
-        <div class="dots">
-          ${dayHasIngreso(d) ? '<span class="fin-dot" style="background:#2f9e44"></span>' : ''}
-          ${dayHasGasto(d) ? '<span class="fin-dot" style="background:#c0392b"></span>' : ''}
+        <div class="fin-cal-daynum">${parseInt(d.slice(8), 10)}</div>
+        <div class="fin-cal-sums">
+          ${inSum > 0 ? `<div class="fin-cal-sum in">+${fmtCompact(inSum)}</div>` : ''}
+          ${outSum > 0 ? `<div class="fin-cal-sum out">-${fmtCompact(outSum)}</div>` : ''}
         </div>
       </div>`;
     });
@@ -476,9 +512,9 @@ function renderSaldo() {
   });
   html += '</div>';
   html += `<div class="fin-legend">
-    <span><span class="fin-dot" style="background:#2f9e44"></span> Día con ingresos</span>
+    <span><span class="fin-dot" style="background:#2f9e44"></span> Ingresos del día</span>
     <span><span class="fin-dot" style="background:#f5d565"></span> Hoy</span>
-    <span><span class="fin-dot" style="background:#c0392b"></span> Día con gastos</span>
+    <span><span class="fin-dot" style="background:#c0392b"></span> Gastos del día</span>
   </div>`;
 
   const dayTx = getDayTx();
@@ -502,6 +538,10 @@ function renderSaldo() {
       </div>
     </div>`;
   });
+  html += `<div class="fin-daynav">
+    <button onclick="dayShift(-1)">‹ ${shortDateLabel(addDaysISO(STATE.selectedDay, -1))}</button>
+    <button onclick="dayShift(1)">${shortDateLabel(addDaysISO(STATE.selectedDay, 1))} ›</button>
+  </div>`;
   html += '</div>';
   return html;
 }
