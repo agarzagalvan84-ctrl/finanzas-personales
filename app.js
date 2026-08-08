@@ -443,9 +443,9 @@ function renderTopBar() {
 }
 function pillBtn(tab, label, color, emoji) {
   const active = STATE.mainTab === tab;
-  return `<button class="fin-pill ${active ? 'active' : ''}" style="border-bottom-color:${active ? '#fff' : 'transparent'}" onclick="setMainTab('${tab}')">
+  return `<button class="fin-pill ${active ? 'active' : ''}" style="color:${color}" onclick="setMainTab('${tab}')">
     <div class="fin-pill-ic" style="background:${color}">${emoji}</div>
-    <div class="fin-pill-label" style="color:#fff;opacity:${active ? '1' : '.8'}">${label}</div>
+    <div class="fin-pill-label" style="color:${active ? color : '#3a473f'}">${label}</div>
   </button>`;
 }
 function renderSecNav() {
@@ -688,9 +688,7 @@ function renderCategorias() {
 
 /* ---------------- vista caja chica ---------------- */
 function renderCaja() {
-  let html = `<div style="font-size:12.5px;color:#5c6b62;background:#fafcfa;border:1px solid #e7ece7;border-radius:8px;padding:10px 12px;margin-bottom:14px;">
-    ⚠️ El saldo de caja chica funciona como tu nota actual: lo ajustas al valor real cuando quieras, o registras retiros/depósitos puntuales. Cada cambio queda en el historial.
-  </div>`;
+  let html = '';
 
   html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;">';
   ['MXN', 'USD'].forEach((moneda) => {
@@ -736,7 +734,7 @@ function renderCaja() {
     html += `<div style="display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid #f2f4f2;">
       <div>
         <div style="font-size:13px;font-weight:600;">${l.tipo === 'ajuste' ? 'Ajuste de saldo' : l.tipo === 'deposito' ? 'Depósito' : 'Retiro'} · ${l.moneda}</div>
-        <div style="font-size:11.5px;color:#8a978f;">${l.fecha}${l.nota ? ' · ' + escapeHtml(l.nota) : ''}</div>
+        <div style="font-size:11.5px;color:#8a978f;">${fechaKey(l.fecha)}${l.nota ? ' · ' + escapeHtml(l.nota) : ''}</div>
       </div>
       <div style="text-align:right;">
         <div class="fin-num" style="font-weight:700;color:${Number(l.delta) >= 0 ? '#2f9e44' : '#c0392b'}">${Number(l.delta) >= 0 ? '+' : ''}${fmt(l.delta, l.moneda)}</div>
