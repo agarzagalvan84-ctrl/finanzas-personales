@@ -59,7 +59,7 @@ let STATE = {
   transactions: [], catIngreso: [], catGasto: [], caja: { mxn: 0, usd: 0 }, cajaLog: [],
   loaded: false, mainTab: 'saldo', secTab: null, month: ymKey(new Date()), selectedDay: todayISO(),
 };
-let catFormTipo = 'gasto', catFormIcon = ICON_KEYS[0], catFormColor = COLORS[0], catFormNombreDraft = '';
+let catFormTipo = 'gasto', catFormIcon = ICON_KEYS[0], catFormColor = COLORS[0], catFormNombreDraft = '', catEditingId = null;
 let uiCajaEditMoneda = null, uiCajaMoveModal = null;
 let repMoneda = 'MXN', repHistMeses = 6, repProjMeses = 3, repYear = null;
 let trendChartInstance = null;
@@ -205,7 +205,7 @@ function getDayTx() { return STATE.transactions.filter((t) => t.fecha === STATE.
 /* ---------------- categorías: form draft ---------------- */
 function saveCatNombreDraft() { const el = document.getElementById('nuevaCatNombre'); if (el) catFormNombreDraft = el.value; }
 function restoreCatNombreDraft() { const el = document.getElementById('nuevaCatNombre'); if (el) el.value = catFormNombreDraft; }
-function setCatFormTipo(t) { catFormTipo = t; catFormNombreDraft = ''; render(); }
+function setCatFormTipo(t) { catFormTipo = t; catFormNombreDraft = ''; catEditingId = null; render(); }
 function pickCatIcon(k) { saveCatNombreDraft(); catFormIcon = k; render(); restoreCatNombreDraft(); }
 function pickCatColor(c) { saveCatNombreDraft(); catFormColor = c; render(); restoreCatNombreDraft(); }
 async function submitNuevaCategoria() {
@@ -213,6 +213,36 @@ async function submitNuevaCategoria() {
   const nombre = el ? el.value : '';
   await addCategoria(catFormTipo, nombre, catFormIcon, catFormColor);
   catFormNombreDraft = '';
+}
+function startEditCategoria(tipo, id) {
+  const list = tipo === 'ingreso' ? STATE.catIngreso : STATE.catGasto;
+  const cat = list.find((c) => c.id === id);
+  if (!cat) return;
+  catFormTipo = tipo;
+  catEditingId = id;
+  catFormNombreDraft = cat.nombre;
+  catFormIcon = cat.icon;
+  catFormColor = cat.color;
+  render();
+}
+function cancelEditCategoria() {
+  catEditingId = null;
+  catFormNombreDraft = '';
+  render();
+}
+async function submitEditCategoria() {
+  const el = document.getElementById('nuevaCatNombre');
+  const nombre = (el ? el.value : '').trim();
+  if (!nombre) return;
+  const list = catFormTipo === 'ingreso' ? STATE.catIngreso : STATE.catGasto;
+  const res = await api('updateCategoria', { tipo: catFormTipo, id: catEditingId, nombre, icon: catFormIcon, color: catFormColor });
+  if (!res.ok) { showToast('Error: ' + res.error); return; }
+  const cat = list.find((c) => c.id === catEditingId);
+  if (cat) { cat.nombre = nombre; cat.icon = catFormIcon; cat.color = catFormColor; }
+  catEditingId = null;
+  catFormNombreDraft = '';
+  render();
+  showToast('Categoría actualizada');
 }
 
 /* ---------------- caja chica: UI ---------------- */
@@ -530,8 +560,9 @@ function renderCategorias() {
     <button class="fin-actbtn" style="background:${catFormTipo === 'ingreso' ? '#233029' : '#f2f4f2'};color:${catFormTipo === 'ingreso' ? '#fff' : '#3a473f'}" onclick="setCatFormTipo('ingreso')">Categorías de ingreso</button>
   </div>`;
 
+  const editing = !!catEditingId;
   html += `<div class="fin-card">
-    <div class="fin-label" style="margin-bottom:8px;">Nueva categoría de ${catFormTipo === 'ingreso' ? 'ingreso' : 'gasto'}</div>
+    <div class="fin-label" style="margin-bottom:8px;">${editing ? 'Editar categoría' : 'Nueva categoría de ' + (catFormTipo === 'ingreso' ? 'ingreso' : 'gasto')}</div>
     <input id="nuevaCatNombre" class="fin-input" placeholder="Nombre" style="margin-bottom:10px;" value="${escapeHtml(catFormNombreDraft)}" />
     <div class="fin-label" style="margin-bottom:6px;">Ícono</div>
     <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">
@@ -541,7 +572,11 @@ function renderCategorias() {
     <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;">
       ${COLORS.map((c) => `<div class="fin-swatch ${catFormColor === c ? 'sel' : ''}" style="background:${c}" onclick="pickCatColor('${c}')"></div>`).join('')}
     </div>
-    <button class="fin-btn" onclick="submitNuevaCategoria()">+ Agregar categoría</button>
+    <div style="display:flex;gap:8px;">
+      ${editing
+        ? `<button class="fin-btn" onclick="submitEditCategoria()">Guardar cambios</button><button class="fin-btn outline" onclick="cancelEditCategoria()">Cancelar</button>`
+        : `<button class="fin-btn" onclick="submitNuevaCategoria()">+ Agregar categoría</button>`}
+    </div>
   </div>`;
 
   html += `<div class="fin-card"><div class="fin-label" style="margin-bottom:8px;">Tus categorías de ${catFormTipo === 'ingreso' ? 'ingreso' : 'gasto'} (${cats.length})</div>`;
@@ -554,7 +589,10 @@ function renderCategorias() {
         <span style="font-weight:600;font-size:13.5px;">${escapeHtml(c.nombre)}</span>
         <span style="font-size:11.5px;color:#8a978f;">${usage} mov.</span>
       </div>
-      <button class="fin-btn ghost" onclick="deleteCategoria('${catFormTipo}','${c.id}')">🗑</button>
+      <div style="display:flex;gap:4px;">
+        <button class="fin-btn outline" style="padding:6px 8px;" onclick="startEditCategoria('${catFormTipo}','${c.id}')">✎</button>
+        <button class="fin-btn ghost" onclick="deleteCategoria('${catFormTipo}','${c.id}')">🗑</button>
+      </div>
     </div>`;
   });
   html += '</div>';
