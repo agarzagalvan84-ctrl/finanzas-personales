@@ -7,12 +7,10 @@
 
 /* ---------------- helpers de fecha ---------------- */
 function pad2(n) { return String(n).padStart(2, '0'); }
-function todayISO() {
-  const d = new Date();
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
-}
+function todayISO() { const d = new Date(); return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; }
 function ymKey(d) { return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`; }
-function monthKeyFromDate(iso) { return iso.slice(0, 7); }
+function monthKeyFromDate(iso) { return String(iso).slice(0, 7); }
+function fechaKey(f) { return String(f).slice(0, 10); }
 const DOW = ['Lu', 'Ma', 'Mi', 'Ju', 'Vi', 'Sa', 'Do'];
 const MONTHS = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
 const MONTHS_SHORT = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
@@ -38,6 +36,28 @@ function buildCalendarWeeks(ymk) {
   for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
   return weeks;
 }
+function addDaysISO(iso, delta) {
+  const [y, m, d] = iso.split('-').map(Number);
+  const dt = new Date(y, m - 1, d + delta);
+  return `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}`;
+}
+function weekRangeOf(iso) {
+  const [y, m, d] = iso.split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  const dow = (dt.getDay() + 6) % 7; // lunes = 0
+  const start = addDaysISO(iso, -dow);
+  const end = addDaysISO(iso, 6 - dow);
+  return [start, end];
+}
+function shortDateLabel(iso) {
+  const [y, m, d] = iso.split('-').map(Number);
+  return `${MONTHS_SHORT[m - 1]}. ${d}`;
+}
+function fmtCompact(n) {
+  const v = Math.abs(Number(n) || 0);
+  if (v >= 1000) return Math.round(v / 1000) + 'k';
+  return String(Math.round(v));
+}
 function fmt(n, currency) {
   currency = currency === 'USD' ? 'USD' : 'MXN';
   return new Intl.NumberFormat('es-MX', { style: 'currency', currency, maximumFractionDigits: 2 }).format(Number(n) || 0);
@@ -48,21 +68,21 @@ function escapeHtml(s) {
 
 /* ---------------- íconos / colores ---------------- */
 const ICONS = {
-  home: '🏠', car: '🚗', phone: '📱', food: '🍽️', fun: '🎮', users: '👥', fuel: '⛽',
-  cart: '🛒', school: '🎓', health: '❤️', gift: '🎁', bank: '🏦', coins: '🪙', piggy: '🐷',
-  wallet: '👛', briefcase: '💼', percent: '%', hand: '🤝', cash: '💵', building: '🏢', tag: '🏷️',
+  home: '🏠', car: '🚗', phone: '📱', food: '🍔', fun: '🎮', users: '👨‍👩‍👧', fuel: '⛽',
+  cart: '🛒', school: '🎓', health: '🩺', gift: '🎁', bank: '🏦', coins: '🪙', piggy: '🐷',
+  wallet: '💳', briefcase: '💼', percent: '🧾', hand: '🤝', cash: '💵', building: '🏢', tag: '🏷️',
 };
 const ICON_KEYS = Object.keys(ICONS);
 function iconEmoji(k) { return ICONS[k] || '🏷️'; }
 
-const COLORS = ['#2F6FE0', '#E0357A', '#3AA0C9', '#C0392B', '#1F7A3E', '#6DBF4B', '#E08E19', '#2E8F87', '#8A5A2E', '#7A4EC9', '#C9A227', '#4E5D78'];
+const COLORS = ['#5AC8FA', '#FF6FA5', '#5ED9C4', '#FF7F6B', '#8BD46E', '#B6E85A', '#FFC24B', '#4FD8D0', '#FFB366', '#B98CF2', '#FFDA4D', '#7C9CE0'];
 
 /* ---------------- estado ---------------- */
 let STATE = {
   transactions: [], catIngreso: [], catGasto: [], caja: { mxn: 0, usd: 0 }, cajaLog: [],
-  loaded: false, mainTab: 'saldo', secTab: null, month: ymKey(new Date()), selectedDay: todayISO(),
+  loaded: false, mainTab: 'saldo', secTab: null, month: ymKey(new Date()), selectedDay: todayISO(), statsPeriod: 'mes',
 };
-let catFormTipo = 'gasto', catFormIcon = ICON_KEYS[0], catFormColor = COLORS[0], catFormNombreDraft = '';
+let catFormTipo = 'gasto', catFormIcon = ICON_KEYS[0], catFormColor = COLORS[0], catFormNombreDraft = '', catEditingId = null;
 let uiCajaEditMoneda = null, uiCajaMoveModal = null;
 let repMoneda = 'MXN', repHistMeses = 6, repProjMeses = 3, repYear = null;
 let trendChartInstance = null;
@@ -192,17 +212,46 @@ async function cajaMover(moneda, tipo, monto, nota) {
 }
 
 /* ---------------- navegación ---------------- */
-function setMainTab(tab) { STATE.mainTab = tab; render(); }
+function setMainTab(tab) {
+  STATE.mainTab = tab;
+  STATE.secTab = null;
+  STATE.month = ymKey(new Date());
+  STATE.selectedDay = todayISO();
+  render();
+}
 function setSecTab(tab) { STATE.secTab = tab || null; render(); }
 function monthShift(delta) { STATE.month = addMonths(STATE.month, delta); render(); }
 function selectDay(d) { STATE.selectedDay = d; render(); }
+function dayShift(delta) {
+  STATE.selectedDay = addDaysISO(STATE.selectedDay, delta);
+  STATE.month = monthKeyFromDate(STATE.selectedDay);
+  render();
+}
+function setStatsPeriod(p) { STATE.statsPeriod = p; render(); }
+function getPeriodTx(tipo) {
+  const period = STATE.statsPeriod;
+  if (period === 'semana') {
+    const [start, end] = weekRangeOf(STATE.selectedDay);
+    return STATE.transactions.filter((t) => t.tipo === tipo && fechaKey(t.fecha) >= start && fechaKey(t.fecha) <= end);
+  }
+  if (period === 'ano') {
+    const year = STATE.month.slice(0, 4);
+    return STATE.transactions.filter((t) => t.tipo === tipo && fechaKey(t.fecha).slice(0, 4) === year);
+  }
+  return STATE.transactions.filter((t) => t.tipo === tipo && monthKeyFromDate(t.fecha) === STATE.month);
+}
+function periodLabel() {
+  if (STATE.statsPeriod === 'semana') { const [s, e] = weekRangeOf(STATE.selectedDay); return `semana del ${shortDateLabel(s)} al ${shortDateLabel(e)}`; }
+  if (STATE.statsPeriod === 'ano') return `año ${STATE.month.slice(0, 4)}`;
+  return monthLabelLong(STATE.month);
+}
 function getMonthTx() { return STATE.transactions.filter((t) => monthKeyFromDate(t.fecha) === STATE.month); }
-function getDayTx() { return STATE.transactions.filter((t) => t.fecha === STATE.selectedDay).sort((a, b) => (a.tipo < b.tipo ? -1 : 1)); }
+function getDayTx() { return STATE.transactions.filter((t) => fechaKey(t.fecha) === STATE.selectedDay).sort((a, b) => (a.tipo < b.tipo ? -1 : 1)); }
 
 /* ---------------- categorías: form draft ---------------- */
 function saveCatNombreDraft() { const el = document.getElementById('nuevaCatNombre'); if (el) catFormNombreDraft = el.value; }
 function restoreCatNombreDraft() { const el = document.getElementById('nuevaCatNombre'); if (el) el.value = catFormNombreDraft; }
-function setCatFormTipo(t) { catFormTipo = t; catFormNombreDraft = ''; render(); }
+function setCatFormTipo(t) { catFormTipo = t; catFormNombreDraft = ''; catEditingId = null; render(); }
 function pickCatIcon(k) { saveCatNombreDraft(); catFormIcon = k; render(); restoreCatNombreDraft(); }
 function pickCatColor(c) { saveCatNombreDraft(); catFormColor = c; render(); restoreCatNombreDraft(); }
 async function submitNuevaCategoria() {
@@ -210,6 +259,36 @@ async function submitNuevaCategoria() {
   const nombre = el ? el.value : '';
   await addCategoria(catFormTipo, nombre, catFormIcon, catFormColor);
   catFormNombreDraft = '';
+}
+function startEditCategoria(tipo, id) {
+  const list = tipo === 'ingreso' ? STATE.catIngreso : STATE.catGasto;
+  const cat = list.find((c) => c.id === id);
+  if (!cat) return;
+  catFormTipo = tipo;
+  catEditingId = id;
+  catFormNombreDraft = cat.nombre;
+  catFormIcon = cat.icon;
+  catFormColor = cat.color;
+  render();
+}
+function cancelEditCategoria() {
+  catEditingId = null;
+  catFormNombreDraft = '';
+  render();
+}
+async function submitEditCategoria() {
+  const el = document.getElementById('nuevaCatNombre');
+  const nombre = (el ? el.value : '').trim();
+  if (!nombre) return;
+  const list = catFormTipo === 'ingreso' ? STATE.catIngreso : STATE.catGasto;
+  const res = await api('updateCategoria', { tipo: catFormTipo, id: catEditingId, nombre, icon: catFormIcon, color: catFormColor });
+  if (!res.ok) { showToast('Error: ' + res.error); return; }
+  const cat = list.find((c) => c.id === catEditingId);
+  if (cat) { cat.nombre = nombre; cat.icon = catFormIcon; cat.color = catFormColor; }
+  catEditingId = null;
+  catFormNombreDraft = '';
+  render();
+  showToast('Categoría actualizada');
 }
 
 /* ---------------- caja chica: UI ---------------- */
@@ -249,7 +328,7 @@ function openTxModal(tipo, existingId) {
   const draft = {
     id: existing ? existing.id : null,
     tipo, monto: existing ? String(existing.monto) : '', moneda: existing ? existing.moneda : 'MXN',
-    fecha: existing ? existing.fecha : STATE.selectedDay, categoriaId: existing ? existing.categoriaId : '', nota: existing ? existing.nota : '',
+    fecha: existing ? fechaKey(existing.fecha) : STATE.selectedDay, categoriaId: existing ? existing.categoriaId : '', nota: existing ? existing.nota : '',
   };
   let showPicker = false;
   let submitting = false;
@@ -351,8 +430,14 @@ function openTxModal(tipo, existingId) {
 function render() {
   const root = document.getElementById('app');
   if (!STATE.loaded) { root.innerHTML = '<div class="fin-loading">Cargando tus datos…</div>'; return; }
-  root.innerHTML = renderTopBar() + renderSecNav() + '<div class="fin-body">' + renderBody() + '</div>';
+  root.innerHTML = renderHeader() + renderTopBar() + renderSecNav() + '<div class="fin-body">' + renderBody() + '</div>';
   if (STATE.secTab === 'reportes') drawTrendChart();
+}
+function renderHeader() {
+  return `<div class="fin-header">
+    <span>💰 Finanzas Personales</span>
+    <button class="fin-refresh-btn" title="Actualizar app" onclick="location.href = location.pathname + '?v=' + Date.now();">🔄</button>
+  </div>`;
 }
 
 function renderTopBar() {
@@ -364,13 +449,13 @@ function renderTopBar() {
 }
 function pillBtn(tab, label, color, emoji) {
   const active = STATE.mainTab === tab;
-  return `<button class="fin-pill ${active ? 'active' : ''}" onclick="setMainTab('${tab}')">
-    <div class="fin-pill-ic" style="background:${active ? color : '#c9d6cc'}">${emoji}</div>
-    <div class="fin-pill-label" style="color:${active ? color : '#7a877e'}">${label}</div>
+  return `<button class="fin-pill ${active ? 'active' : ''}" style="color:${color}" onclick="setMainTab('${tab}')">
+    <div class="fin-pill-ic" style="background:${color}">${emoji}</div>
+    <div class="fin-pill-label" style="color:${active ? color : '#3a473f'}">${label}</div>
   </button>`;
 }
 function renderSecNav() {
-  const items = [['', '📅 Día a día'], ['reportes', '📊 Reportes'], ['caja', '👛 Caja chica'], ['categorias', '⚙️ Categorías']];
+  const items = [['', '📅 Día a día'], ['reportes', '📊 Reportes'], ['caja', '🔐 Caja chica'], ['categorias', '⚙️ Categorías']];
   let html = '<div class="fin-secnav">' + items.map(([tab, label]) => {
     const active = (STATE.secTab || '') === tab;
     return `<button class="fin-secbtn ${active ? 'active' : ''}" onclick="setSecTab('${tab}')">${label}</button>`;
@@ -409,10 +494,25 @@ function renderSaldo() {
   const gastos = monthTx.filter((t) => t.tipo === 'gasto' && t.moneda !== 'USD').reduce((s, t) => s + Number(t.monto), 0);
   const saldo = ingresos - gastos;
   const weeks = buildCalendarWeeks(STATE.month);
-  const dayHasIngreso = (d) => monthTx.some((t) => t.fecha === d && t.tipo === 'ingreso');
-  const dayHasGasto = (d) => monthTx.some((t) => t.fecha === d && t.tipo === 'gasto');
+  const dayHasIngreso = (d) => monthTx.some((t) => fechaKey(t.fecha) === d && t.tipo === 'ingreso');
+  const dayHasGasto = (d) => monthTx.some((t) => fechaKey(t.fecha) === d && t.tipo === 'gasto');
+  const dayIngresoSum = (d) => monthTx.filter((t) => fechaKey(t.fecha) === d && t.tipo === 'ingreso' && t.moneda !== 'USD').reduce((s, t) => s + Number(t.monto), 0);
+  const dayGastoSum = (d) => monthTx.filter((t) => fechaKey(t.fecha) === d && t.tipo === 'gasto' && t.moneda !== 'USD').reduce((s, t) => s + Number(t.monto), 0);
 
-  let html = `<div class="fin-summary">
+  const total = ingresos + gastos;
+  const pctIn = total ? (ingresos / total) * 100 : 50;
+  const pctOut = total ? (gastos / total) * 100 : 50;
+
+  let html = `<div class="fin-balance-row">
+    <div class="fin-balance-btn in"></div>
+    <div class="fin-balance-bar">
+      <div class="fin-balance-fill in" style="width:${pctIn}%"></div>
+      <div class="fin-balance-fill out" style="width:${pctOut}%"></div>
+    </div>
+    <div class="fin-balance-btn out"></div>
+  </div>`;
+
+  html += `<div class="fin-summary">
     <div class="fin-summary-row"><span>Ingresos</span><span class="fin-num" style="color:#2f9e44;font-weight:700;">${fmt(ingresos)}</span></div>
     <div class="fin-summary-row"><span>Gastos</span><span class="fin-num" style="color:#c0392b;font-weight:700;">${fmt(gastos)}</span></div>
     <div class="fin-summary-row total"><span>Saldo</span><span class="fin-num" style="color:${saldo >= 0 ? '#233029' : '#c0392b'}">${fmt(saldo)}</span></div>
@@ -469,6 +569,18 @@ function renderSaldo() {
       </div>
     </div>`;
   });
+  const dayIn = dayTx.filter((t) => t.moneda !== 'USD' && t.tipo === 'ingreso').reduce((s, t) => s + Number(t.monto), 0);
+  const dayOut = dayTx.filter((t) => t.moneda !== 'USD' && t.tipo === 'gasto').reduce((s, t) => s + Number(t.monto), 0);
+  const daySaldo = dayIn - dayOut;
+  if (dayTx.length > 0) {
+    html += `<div class="fin-summary-row total" style="background:#fafcfa;border:1px solid #eef1ee;border-top:none;padding:10px 14px;margin:0;">
+      <span>Saldo del día</span><span class="fin-num" style="color:${daySaldo >= 0 ? '#233029' : '#c0392b'}">${fmt(daySaldo)}</span>
+    </div>`;
+  }
+  html += `<div class="fin-daynav">
+    <button onclick="dayShift(-1)">‹ ${shortDateLabel(addDaysISO(STATE.selectedDay, -1))}</button>
+    <button onclick="dayShift(1)">${shortDateLabel(addDaysISO(STATE.selectedDay, 1))} ›</button>
+  </div>`;
   html += '</div>';
   return html;
 }
@@ -488,6 +600,20 @@ function renderCategoriaBars(tipo) {
   let html = `<div class="fin-actions">
     <button class="fin-actbtn" onclick="openTxModal('${tipo}')"><div class="ic" style="background:${colorMain}">+</div>${tipo === 'ingreso' ? 'Añadir ingreso' : 'Añadir gasto'}</button>
   </div>`;
+
+  const periodTx = getPeriodTx(tipo).filter((t) => t.moneda !== 'USD');
+  const periodTotal = periodTx.reduce((s, t) => s + Number(t.monto), 0);
+  html += `<div class="fin-card">
+    <div class="fin-label" style="margin-bottom:8px;">Total de ${tipo === 'ingreso' ? 'ingresos' : 'gastos'} · ${periodLabel()}</div>
+    <div style="display:flex;gap:6px;margin-bottom:10px;">
+      <button class="fin-secbtn ${STATE.statsPeriod === 'semana' ? 'active' : ''}" onclick="setStatsPeriod('semana')">Semana</button>
+      <button class="fin-secbtn ${STATE.statsPeriod === 'mes' ? 'active' : ''}" onclick="setStatsPeriod('mes')">Mes</button>
+      <button class="fin-secbtn ${STATE.statsPeriod === 'ano' ? 'active' : ''}" onclick="setStatsPeriod('ano')">Año</button>
+    </div>
+    <div class="fin-value" style="color:${colorMain}">${fmt(periodTotal)}</div>
+    <div style="font-size:11.5px;color:#8a978f;margin-top:3px;">${periodTx.length} ${periodTx.length === 1 ? 'movimiento' : 'movimientos'}</div>
+  </div>`;
+
   html += `<div class="fin-card"><div class="fin-label" style="margin-bottom:8px;">Distribución por categoría · ${tipo === 'ingreso' ? 'ingresos' : 'gastos'} del mes</div>`;
   if (byCat.length === 0) {
     html += `<div class="fin-empty">Este mes aún no hay transacciones de ${tipo === 'ingreso' ? 'ingresos' : 'gastos'}. En cuanto empieces a añadir, este gráfico estará disponible con los detalles resumidos.</div>`;
@@ -527,8 +653,9 @@ function renderCategorias() {
     <button class="fin-actbtn" style="background:${catFormTipo === 'ingreso' ? '#233029' : '#f2f4f2'};color:${catFormTipo === 'ingreso' ? '#fff' : '#3a473f'}" onclick="setCatFormTipo('ingreso')">Categorías de ingreso</button>
   </div>`;
 
+  const editing = !!catEditingId;
   html += `<div class="fin-card">
-    <div class="fin-label" style="margin-bottom:8px;">Nueva categoría de ${catFormTipo === 'ingreso' ? 'ingreso' : 'gasto'}</div>
+    <div class="fin-label" style="margin-bottom:8px;">${editing ? 'Editar categoría' : 'Nueva categoría de ' + (catFormTipo === 'ingreso' ? 'ingreso' : 'gasto')}</div>
     <input id="nuevaCatNombre" class="fin-input" placeholder="Nombre" style="margin-bottom:10px;" value="${escapeHtml(catFormNombreDraft)}" />
     <div class="fin-label" style="margin-bottom:6px;">Ícono</div>
     <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">
@@ -538,7 +665,11 @@ function renderCategorias() {
     <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;">
       ${COLORS.map((c) => `<div class="fin-swatch ${catFormColor === c ? 'sel' : ''}" style="background:${c}" onclick="pickCatColor('${c}')"></div>`).join('')}
     </div>
-    <button class="fin-btn" onclick="submitNuevaCategoria()">+ Agregar categoría</button>
+    <div style="display:flex;gap:8px;">
+      ${editing
+        ? `<button class="fin-btn" onclick="submitEditCategoria()">Guardar cambios</button><button class="fin-btn outline" onclick="cancelEditCategoria()">Cancelar</button>`
+        : `<button class="fin-btn" onclick="submitNuevaCategoria()">+ Agregar categoría</button>`}
+    </div>
   </div>`;
 
   html += `<div class="fin-card"><div class="fin-label" style="margin-bottom:8px;">Tus categorías de ${catFormTipo === 'ingreso' ? 'ingreso' : 'gasto'} (${cats.length})</div>`;
@@ -551,7 +682,10 @@ function renderCategorias() {
         <span style="font-weight:600;font-size:13.5px;">${escapeHtml(c.nombre)}</span>
         <span style="font-size:11.5px;color:#8a978f;">${usage} mov.</span>
       </div>
-      <button class="fin-btn ghost" onclick="deleteCategoria('${catFormTipo}','${c.id}')">🗑</button>
+      <div style="display:flex;gap:4px;">
+        <button class="fin-btn outline" style="padding:6px 8px;" onclick="startEditCategoria('${catFormTipo}','${c.id}')">✎</button>
+        <button class="fin-btn ghost" onclick="deleteCategoria('${catFormTipo}','${c.id}')">🗑</button>
+      </div>
     </div>`;
   });
   html += '</div>';
@@ -560,9 +694,7 @@ function renderCategorias() {
 
 /* ---------------- vista caja chica ---------------- */
 function renderCaja() {
-  let html = `<div style="font-size:12.5px;color:#5c6b62;background:#fafcfa;border:1px solid #e7ece7;border-radius:8px;padding:10px 12px;margin-bottom:14px;">
-    ⚠️ El saldo de caja chica funciona como tu nota actual: lo ajustas al valor real cuando quieras, o registras retiros/depósitos puntuales. Cada cambio queda en el historial.
-  </div>`;
+  let html = '';
 
   html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;">';
   ['MXN', 'USD'].forEach((moneda) => {
@@ -608,7 +740,7 @@ function renderCaja() {
     html += `<div style="display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid #f2f4f2;">
       <div>
         <div style="font-size:13px;font-weight:600;">${l.tipo === 'ajuste' ? 'Ajuste de saldo' : l.tipo === 'deposito' ? 'Depósito' : 'Retiro'} · ${l.moneda}</div>
-        <div style="font-size:11.5px;color:#8a978f;">${l.fecha}${l.nota ? ' · ' + escapeHtml(l.nota) : ''}</div>
+        <div style="font-size:11.5px;color:#8a978f;">${fechaKey(l.fecha)}${l.nota ? ' · ' + escapeHtml(l.nota) : ''}</div>
       </div>
       <div style="text-align:right;">
         <div class="fin-num" style="font-weight:700;color:${Number(l.delta) >= 0 ? '#2f9e44' : '#c0392b'}">${Number(l.delta) >= 0 ? '+' : ''}${fmt(l.delta, l.moneda)}</div>
