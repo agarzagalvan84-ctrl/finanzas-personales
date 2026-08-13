@@ -88,7 +88,8 @@ let repMoneda = 'MXN', repHistMeses = 6, repProjMeses = 3, repYear = null;
 let trendChartInstance = null;
 
 /* ---------------- API ---------------- */
-async function api(action, payload) {
+async function api(action, payload, timeoutMs) {
+  let timer = null;
   try {
     const cleanUrl = String(API_URL || '').trim();
     const cleanToken = String(API_TOKEN || '').trim();
@@ -97,21 +98,72 @@ async function api(action, payload) {
       action: action,
       payload: JSON.stringify(payload || {}),
     });
-    const res = await fetch(cleanUrl + '?' + qs.toString(), { method: 'GET' });
+    const controller = timeoutMs ? new AbortController() : null;
+    if (timeoutMs) timer = setTimeout(() => controller.abort(), timeoutMs);
+    const res = await fetch(cleanUrl + '?' + qs.toString(), {
+      method: 'GET',
+      signal: controller ? controller.signal : undefined,
+    });
     return await res.json();
   } catch (e) {
-    return { ok: false, error: 'No se pudo conectar con el backend: ' + e.message };
+    const msg = e.name === 'AbortError'
+      ? 'La conexión tardó demasiado (revisa tu señal e intenta de nuevo).'
+      : 'No se pudo conectar con el backend: ' + e.message;
+    return { ok: false, error: msg };
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
 function normalizeTx(t) { return Object.assign({}, t, { monto: Number(t.monto) }); }
 function normalizeLog(l) { return Object.assign({}, l, { delta: Number(l.delta), resultante: Number(l.resultante) }); }
 
+/* ---------------- caché local (respaldo sin conexión) ---------------- */
+const CACHE_KEY = 'finPersonalesCacheV1';
+function saveLocalCache() {
+  try {
+    const snapshot = {
+      transactions: STATE.transactions, catIngreso: STATE.catIngreso, catGasto: STATE.catGasto,
+      caja: STATE.caja, cajaLog: STATE.cajaLog, savedAt: Date.now(),
+    };
+    localStorage.setItem(CACHE_KEY, JSON.stringify(snapshot));
+  } catch (e) { /* si localStorage falla (modo privado, cuota, etc.) simplemente no hay respaldo */ }
+}
+function loadLocalCache() {
+  try {
+    const raw = localStorage.getItem(CACHE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) { return null; }
+}
+function fmtCacheTime(ts) {
+  try { return new Date(ts).toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' }); } catch (e) { return ''; }
+}
+
 async function loadAll() {
-  const res = await api('getAll');
+  // 1) Si hay datos guardados de una carga anterior, se pintan de inmediato
+  //    (así la app "abre" al toque aunque la red esté lenta o caída).
+  const cached = loadLocalCache();
+  if (cached) {
+    STATE.transactions = (cached.transactions || []).map(normalizeTx);
+    STATE.catIngreso = cached.catIngreso || [];
+    STATE.catGasto = cached.catGasto || [];
+    STATE.caja = cached.caja || { mxn: 0, usd: 0 };
+    STATE.cajaLog = (cached.cajaLog || []).map(normalizeLog);
+    STATE.loaded = true;
+    render();
+    if (cached.savedAt) showToast('Mostrando datos guardados (' + fmtCacheTime(cached.savedAt) + ')');
+  }
+
+  // 2) En paralelo, se intenta traer la versión fresca con límite de tiempo.
+  const res = await api('getAll', null, 12000);
   if (!res.ok) {
-    document.getElementById('app').innerHTML =
-      `<div class="fin-loading">Error al cargar: ${escapeHtml(res.error || 'desconocido')}<br><br>Revisa API_URL y API_TOKEN en config.js.</div>`;
+    if (!cached) {
+      document.getElementById('app').innerHTML =
+        `<div class="fin-loading">Error al cargar: ${escapeHtml(res.error || 'desconocido')}<br><br>
+         <button class="fin-btn" onclick="loadAll()">Reintentar</button></div>`;
+    } else {
+      showToast('Sin conexión estable: se quedaron los datos guardados. Intenta de nuevo con mejor señal.');
+    }
     return;
   }
   STATE.transactions = (res.data.transactions || []).map(normalizeTx);
@@ -120,6 +172,7 @@ async function loadAll() {
   STATE.caja = res.data.caja || { mxn: 0, usd: 0 };
   STATE.cajaLog = (res.data.cajaLog || []).map(normalizeLog);
   STATE.loaded = true;
+  saveLocalCache();
   render();
 }
 
@@ -432,6 +485,7 @@ function render() {
   if (!STATE.loaded) { root.innerHTML = '<div class="fin-loading">Cargando tus datos…</div>'; return; }
   root.innerHTML = renderHeader() + renderTopBar() + renderSecNav() + '<div class="fin-body">' + renderBody() + '</div>';
   if (STATE.secTab === 'reportes') drawTrendChart();
+  saveLocalCache(); // respalda el estado actual para la próxima vez que abras sin buena señal
 }
 function renderHeader() {
   return `<div class="fin-header">
