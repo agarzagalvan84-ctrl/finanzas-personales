@@ -2,7 +2,8 @@
    Finanzas Personales — Frontend (JS plano, sin frameworks)
    Mismo patrón que el Board de ALLTANSA:
    GitHub Pages -> Google Apps Script -> Google Sheets
-   Requiere config.js con API_URL, API_TOKEN y (opcional) SHEET_URL
+   Requiere config.js con API_URL y (opcional) SHEET_URL.
+   El token NO va en el repo: se pide una vez y se guarda en este dispositivo.
 ================================================================= */
 
 /* ---------------- helpers de fecha ---------------- */
@@ -88,11 +89,62 @@ let repMoneda = 'MXN', repHistMeses = 6, repProjMeses = 3, repYear = null;
 let trendChartInstance = null;
 
 /* ---------------- API ---------------- */
-async function api(action, payload, timeoutMs) {
+/* ---------------- token (vive en este dispositivo, no en el repo) ---------------- */
+const TOKEN_KEY = 'finPersonalesToken';
+function getToken() { try { return (localStorage.getItem(TOKEN_KEY) || '').trim(); } catch (e) { return ''; } }
+function setToken(t) { try { localStorage.setItem(TOKEN_KEY, t); return getToken() === t; } catch (e) { return false; } }
+function clearToken() { try { localStorage.removeItem(TOKEN_KEY); } catch (e) { /* nada */ } }
+
+function showTokenScreen(msg) {
+  const root = document.getElementById('app');
+  root.innerHTML = `<div class="fin-loading" style="padding-top:80px;">
+    <div style="font-size:40px;">🔐</div>
+    <div style="font-weight:700;font-size:16px;color:#233029;margin:10px 0 4px;">Acceso</div>
+    <div style="font-size:13px;margin:0 auto 16px;max-width:290px;">${escapeHtml(msg || 'Ingresa tu token para conectar esta app. Solo se pide una vez en este dispositivo.')}</div>
+    <input id="tokenInput" class="fin-input" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Token" style="max-width:280px;text-align:center;" />
+    <div style="margin-top:12px;"><button class="fin-btn" id="tokenBtn" onclick="submitToken()">Entrar</button></div>
+    <div id="tokenErr" style="color:#c0392b;font-size:12.5px;margin-top:12px;min-height:16px;"></div>
+  </div>`;
+  const inp = document.getElementById('tokenInput');
+  if (inp) {
+    inp.onkeydown = (e) => { if (e.key === 'Enter') submitToken(); };
+    setTimeout(() => { try { inp.focus(); } catch (e) { /* nada */ } }, 50);
+  }
+}
+let tokenSubmitting = false;
+async function submitToken() {
+  if (tokenSubmitting) return;
+  const inp = document.getElementById('tokenInput');
+  const btn = document.getElementById('tokenBtn');
+  const err = document.getElementById('tokenErr');
+  const t = (inp ? inp.value : '').trim();
+  if (!t) { if (err) err.textContent = 'Escribe el token.'; return; }
+  tokenSubmitting = true;
+  if (btn) { btn.disabled = true; btn.textContent = 'Verificando...'; }
+  if (err) err.textContent = '';
+  const res = await api('getAll', null, 15000, t); // se prueba ANTES de guardarlo
+  tokenSubmitting = false;
+  const fail = (m) => { if (btn) { btn.disabled = false; btn.textContent = 'Entrar'; } if (err) err.textContent = m; };
+  if (!res.ok) { fail(res.error === 'Token inválido' ? 'Token incorrecto.' : res.error); return; }
+  if (!setToken(t)) { fail('No se pudo guardar el token en este navegador (¿modo privado?).'); return; }
+  loadAll();
+}
+function cerrarSesion() {
+  if (!confirm('¿Cerrar sesión en este dispositivo?\n\nSe borrará el token y los datos guardados en el teléfono. Tus datos en Google Sheets no se tocan.')) return;
+  clearToken();
+  try { localStorage.removeItem(CACHE_KEY); } catch (e) { /* nada */ }
+  STATE.loaded = false;
+  STATE.transactions = []; STATE.catIngreso = []; STATE.catGasto = []; STATE.cajaLog = [];
+  STATE.caja = { mxn: 0, usd: 0 };
+  showTokenScreen();
+}
+
+async function api(action, payload, timeoutMs, tokenOverride) {
   let timer = null;
   try {
     const cleanUrl = String(API_URL || '').trim();
-    const cleanToken = String(API_TOKEN || '').trim();
+    const cleanToken = String(tokenOverride || getToken()).trim();
+    if (!cleanToken) { showTokenScreen(); return { ok: false, error: 'Token inválido' }; }
     const qs = new URLSearchParams({
       token: cleanToken,
       action: action,
@@ -104,7 +156,13 @@ async function api(action, payload, timeoutMs) {
       method: 'GET',
       signal: controller ? controller.signal : undefined,
     });
-    return await res.json();
+    const json = await res.json();
+    // El servidor ya no reconoce el token (p. ej. se cambió): se borra y se pide el nuevo.
+    if (json && json.ok === false && json.error === 'Token inválido' && !tokenOverride) {
+      clearToken();
+      showTokenScreen('El token ya no es válido. Ingresa el token actual.');
+    }
+    return json;
   } catch (e) {
     const msg = e.name === 'AbortError'
       ? 'La conexión tardó demasiado (revisa tu señal e intenta de nuevo).'
@@ -156,6 +214,7 @@ function fmtCacheTime(ts) {
 }
 
 async function loadAll() {
+  if (!getToken()) { showTokenScreen(); return; } // sin token no se muestra ni el caché
   // 1) Si hay datos guardados de una carga anterior, se pintan de inmediato
   //    (así la app "abre" al toque aunque la red esté lenta o caída).
   const cached = loadLocalCache();
@@ -172,6 +231,7 @@ async function loadAll() {
 
   // 2) En paralelo, se intenta traer la versión fresca con límite de tiempo.
   const res = await api('getAll', null, 12000);
+  if (!res.ok && res.error === 'Token inválido') return; // api() ya mostró la pantalla de acceso
   if (!res.ok) {
     if (!cached) {
       document.getElementById('app').innerHTML =
@@ -532,7 +592,10 @@ function render() {
 function renderHeader() {
   return `<div class="fin-header">
     <span>💰 Finanzas Personales</span>
-    <button class="fin-refresh-btn" title="Actualizar app" onclick="location.href = location.pathname + '?v=' + Date.now();">🔄</button>
+    <div style="display:flex;gap:8px;">
+      <button class="fin-refresh-btn" title="Cerrar sesión en este dispositivo" onclick="cerrarSesion()">🔒</button>
+      <button class="fin-refresh-btn" title="Actualizar app" onclick="location.href = location.pathname + '?v=' + Date.now();">🔄</button>
+    </div>
   </div>`;
 }
 
