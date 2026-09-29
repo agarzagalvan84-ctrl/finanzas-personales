@@ -130,7 +130,11 @@ async function submitToken() {
   loadAll();
 }
 function cerrarSesion() {
-  if (!confirm('¿Cerrar sesión en este dispositivo?\n\nSe borrará el token y los datos guardados en el teléfono. Tus datos en Google Sheets no se tocan.')) return;
+  const n = PENDING.length;
+  const aviso = n ? `\n\n⚠️ Tienes ${n} movimiento${n === 1 ? '' : 's'} SIN sincronizar. Si cierras sesión se perderán.` : '';
+  if (!confirm('¿Cerrar sesión en este dispositivo?\n\nSe borrará el token y los datos guardados en el teléfono. Tus datos en Google Sheets no se tocan.' + aviso)) return;
+  PENDING = [];
+  try { localStorage.removeItem(QUEUE_KEY); } catch (e) { /* nada */ }
   clearToken();
   try { localStorage.removeItem(CACHE_KEY); } catch (e) { /* nada */ }
   STATE.loaded = false;
@@ -167,7 +171,7 @@ async function api(action, payload, timeoutMs, tokenOverride) {
     const msg = e.name === 'AbortError'
       ? 'La conexión tardó demasiado (revisa tu señal e intenta de nuevo).'
       : 'No se pudo conectar con el backend: ' + e.message;
-    return { ok: false, error: msg };
+    return { ok: false, error: msg, network: true }; // sin señal, timeout o respuesta ilegible: es reintentable
   } finally {
     if (timer) clearTimeout(timer);
   }
@@ -213,6 +217,148 @@ function fmtCacheTime(ts) {
   try { return new Date(ts).toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' }); } catch (e) { return ''; }
 }
 
+/* ---------------- cola de captura sin señal ----------------
+ * Las altas de gastos/ingresos que no logran llegar al servidor (sin señal, timeout)
+ * se guardan en el teléfono y se ven de inmediato con ⏳. Se envían solas al abrir la
+ * app, al recuperar señal, al volver a primer plano y cada 30 s mientras esté abierta.
+ * Cada captura ya trae su id único, así que reenviar nunca duplica en el Sheet.
+ */
+const QUEUE_KEY = 'finPersonalesQueueV1';
+function loadQueue() { try { const a = JSON.parse(localStorage.getItem(QUEUE_KEY) || '[]'); return Array.isArray(a) ? a.filter((q) => q && q.tx && q.tx.id) : []; } catch (e) { return []; } }
+let PENDING = loadQueue();          // [{ tx, ts, error? }]
+let syncPromise = null;             // solo una sincronización a la vez
+function persistQueue() { try { localStorage.setItem(QUEUE_KEY, JSON.stringify(PENDING)); return true; } catch (e) { return false; } }
+function isPending(id) { return PENDING.some((q) => q.tx.id === id); }
+function pendBadge(id) { return isPending(id) ? ` <span data-pid="${id}" title="Pendiente de sincronizar" style="font-size:11px;">⏳</span>` : ''; }
+async function waitSync() { if (syncPromise) { try { await syncPromise; } catch (e) { /* nada */ } } }
+
+function mergePendingIntoState() {
+  PENDING.forEach((q) => {
+    if (!STATE.transactions.some((t) => t.id === q.tx.id)) STATE.transactions.unshift(normalizeTx(q.tx));
+  });
+}
+// Actualiza solo lo necesario (encabezado, marcas ⏳, ventana de pendientes) sin repintar toda la pantalla,
+// para no borrar lo que estés escribiendo.
+function updatePendingUI() {
+  const h = document.querySelector('.fin-header');
+  if (h) h.outerHTML = renderHeader();
+  document.querySelectorAll('[data-pid]').forEach((el) => { if (!isPending(el.getAttribute('data-pid'))) el.remove(); });
+  if (document.getElementById('pendingOverlay')) refreshPendingModal();
+}
+function enqueueTx(tx) {
+  PENDING.push({ tx: Object.assign({}, tx), ts: Date.now() });
+  const ok = persistQueue();
+  if (!STATE.transactions.some((t) => t.id === tx.id)) STATE.transactions.unshift(Object.assign({}, tx));
+  return ok;
+}
+function guardarPendiente(tx) {
+  const ok = enqueueTx(tx);
+  saveLocalCache();
+  render();
+  showToast(ok
+    ? '⏳ Sin señal: guardado en el teléfono. Se sincroniza solo.'
+    : '⚠️ Sin señal y no se pudo guardar en el teléfono. No cierres la app hasta sincronizar.');
+  return true;
+}
+
+function syncQueue(manual) {
+  if (syncPromise) return syncPromise;
+  if (!PENDING.length || !getToken()) return Promise.resolve(0);
+  if (navigator.onLine === false) {
+    if (manual) showToast('Sin señal: se enviarán cuando haya conexión.');
+    return Promise.resolve(0);
+  }
+  const run = async () => {
+    let sent = 0;
+    try {
+      for (const q of PENDING.slice()) {
+        if (!manual && q.error) continue;        // los que fallaron por un error real esperan a que tú decidas
+        if (!PENDING.includes(q)) continue;      // se borró o descartó mientras tanto
+        const res = await api('addTransaccion', q.tx, 15000);
+        if (!res.ok) {
+          if (res.network || res.error === 'Token inválido') break; // sin señal / sin acceso: se reintenta después
+          q.error = res.error || 'error'; persistQueue(); continue;
+        }
+        if (res.data && res.data.error) { q.error = res.data.error; persistQueue(); continue; }
+        PENDING = PENDING.filter((x) => x !== q); persistQueue(); sent++;
+        updatePendingUI();
+      }
+    } catch (e) { /* cualquier imprevisto: los pendientes siguen en la cola */ }
+    if (sent) { saveLocalCache(); showToast('✅ ' + sent + (sent === 1 ? ' movimiento sincronizado' : ' movimientos sincronizados')); }
+    else if (manual && PENDING.length) showToast('Aún no se pudo sincronizar. Revisa tu señal.');
+    updatePendingUI();
+    return sent;
+  };
+  const p = run();
+  syncPromise = p;
+  const clear = () => { if (syncPromise === p) syncPromise = null; };
+  p.then(clear, clear);
+  return p;
+}
+
+function openPendingModal() {
+  if (document.getElementById('pendingOverlay')) return;
+  const o = document.createElement('div');
+  o.id = 'pendingOverlay'; o.className = 'fin-modal-overlay';
+  document.body.appendChild(o);
+  refreshPendingModal();
+}
+function closePendingModal() { const o = document.getElementById('pendingOverlay'); if (o) o.remove(); }
+function refreshPendingModal() {
+  const o = document.getElementById('pendingOverlay');
+  if (!o) return;
+  if (!PENDING.length) { closePendingModal(); return; }
+  const rows = PENDING.map((q) => {
+    const t = q.tx;
+    const cats = t.tipo === 'ingreso' ? STATE.catIngreso : STATE.catGasto;
+    const c = cats.find((x) => x.id === t.categoriaId);
+    const color = t.tipo === 'ingreso' ? '#2f9e44' : '#c0392b';
+    return `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:11px 0;border-bottom:1px solid #eef1ee;">
+      <div style="min-width:0;">
+        <div class="fin-txname">${escapeHtml(c ? c.nombre : 'Sin categoría')}</div>
+        <div class="fin-txnote">${fullDateLabel(t.fecha)}${t.nota ? ' · ' + escapeHtml(t.nota) : ''}</div>
+        <div class="fin-txnote" style="color:${q.error ? '#c0392b' : '#8a978f'};">${q.error ? '⚠️ ' + escapeHtml(q.error) : '⏳ esperando señal'}</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
+        <span class="fin-num" style="font-weight:700;color:${color};">${t.tipo === 'ingreso' ? '+ ' : '- '}${fmt(t.monto, t.moneda)}</span>
+        <button class="fin-btn ghost" onclick="discardPending('${t.id}')" title="Descartar">🗑</button>
+      </div>
+    </div>`;
+  }).join('');
+  o.innerHTML = `<div class="fin-modal">
+    <div class="fin-modal-head" style="background:#e08e19;">
+      <div>
+        <div style="font-weight:700;font-size:15px;">Pendientes de sincronizar</div>
+        <div style="font-size:12px;opacity:.9;">Ya están en tu teléfono; faltan por llegar al Sheet.</div>
+      </div>
+      <button onclick="closePendingModal()" style="background:transparent;border:none;color:#fff;cursor:pointer;font-size:18px;">✕</button>
+    </div>
+    <div class="fin-modal-body" style="padding-top:8px;max-height:55vh;overflow:auto;">${rows}</div>
+    <div class="fin-modal-foot">
+      <button onclick="closePendingModal()">Cerrar</button>
+      <button class="save" id="syncNowBtn" onclick="syncNowFromModal(this)">Sincronizar ahora</button>
+    </div>
+  </div>`;
+}
+async function syncNowFromModal(btn) {
+  if (btn) { btn.disabled = true; btn.textContent = 'Sincronizando...'; }
+  PENDING.forEach((q) => { delete q.error; }); // reintenta también los que habían fallado
+  persistQueue();
+  await syncQueue(true);
+  const b = document.getElementById('syncNowBtn');
+  if (b) { b.disabled = false; b.textContent = 'Sincronizar ahora'; }
+}
+function discardPending(id) {
+  if (!confirm('¿Descartar este movimiento?\n\nNo se guardará en el Sheet y no se podrá recuperar.')) return;
+  PENDING = PENDING.filter((q) => q.tx.id !== id);
+  persistQueue();
+  STATE.transactions = STATE.transactions.filter((t) => t.id !== id);
+  saveLocalCache();
+  render();
+  updatePendingUI();
+  showToast('Movimiento descartado');
+}
+
 async function loadAll() {
   if (!getToken()) { showTokenScreen(); return; } // sin token no se muestra ni el caché
   // 1) Si hay datos guardados de una carga anterior, se pintan de inmediato
@@ -224,6 +370,7 @@ async function loadAll() {
     STATE.catGasto = cached.catGasto || [];
     STATE.caja = cached.caja || { mxn: 0, usd: 0 };
     STATE.cajaLog = dedupeById((cached.cajaLog || []).map(normalizeLog));
+    mergePendingIntoState();
     STATE.loaded = true;
     render();
     if (cached.savedAt) showToast('Mostrando datos guardados (' + fmtCacheTime(cached.savedAt) + ')');
@@ -247,9 +394,11 @@ async function loadAll() {
   STATE.catGasto = res.data.catGasto || [];
   STATE.caja = res.data.caja || { mxn: 0, usd: 0 };
   STATE.cajaLog = dedupeById((res.data.cajaLog || []).map(normalizeLog));
+  mergePendingIntoState(); // lo que aún no llega al Sheet se sigue viendo
   STATE.loaded = true;
   saveLocalCache();
   render();
+  syncQueue();
 }
 
 /* ---------------- toast ---------------- */
@@ -264,11 +413,32 @@ function showToast(msg) {
 
 /* ---------------- mutaciones ---------------- */
 // isNew = true: alta con id generado en el teléfono (tx.id ya viene lleno).
-// Devuelve true si se guardó, false si falló (para que el modal permita reintentar).
+// Devuelve true si se guardó (en el servidor o en la cola del teléfono), false si falló (el modal deja reintentar).
 async function saveTransaccion(tx, isNew) {
-  const action = isNew ? 'addTransaccion' : 'updateTransaccion';
-  const res = await api(action, tx);
-  if (!res.ok) { showToast('Error: ' + res.error); return false; }
+  await waitSync();
+  // Movimiento que aún está pendiente: la corrección se hace en la cola, sin necesitar señal.
+  if (!isNew && isPending(tx.id)) {
+    const q = PENDING.find((x) => x.tx.id === tx.id);
+    q.tx = Object.assign({}, tx); delete q.error;
+    persistQueue();
+    STATE.transactions = STATE.transactions.map((t) => (t.id === tx.id ? Object.assign({}, tx) : t));
+    saveLocalCache(); render();
+    showToast('Movimiento actualizado (⏳ aún pendiente de sincronizar)');
+    return true;
+  }
+  // El teléfono ya sabe que no hay red: directo a la cola, sin esperar.
+  if (isNew && navigator.onLine === false) return guardarPendiente(tx);
+
+  const res = await api(isNew ? 'addTransaccion' : 'updateTransaccion', tx, isNew ? 8000 : 12000);
+  if (!res.ok) {
+    if (res.network) {
+      if (isNew) return guardarPendiente(tx); // reintentar es seguro: el id evita duplicados
+      showToast('Sin señal: editar un movimiento ya guardado necesita conexión. Toca Reintentar.');
+      return false;
+    }
+    showToast('Error: ' + res.error);
+    return false;
+  }
   if (!isNew && res.data && res.data.error) { showToast('Error: ' + res.data.error + ' (recarga con 🔄)'); return false; }
   if (!isNew) {
     STATE.transactions = STATE.transactions.map((t) => (t.id === tx.id ? tx : t));
@@ -287,8 +457,20 @@ async function saveTransaccion(tx, isNew) {
 
 async function deleteTransaccion(id) {
   if (!confirm('¿Eliminar este movimiento?')) return false;
-  const res = await api('deleteTransaccion', { id });
-  if (!res.ok) { showToast('Error: ' + res.error); return false; }
+  await waitSync();
+  if (isPending(id)) { // nunca llegó al Sheet: basta con quitarlo de la cola
+    PENDING = PENDING.filter((q) => q.tx.id !== id);
+    persistQueue();
+    STATE.transactions = STATE.transactions.filter((t) => t.id !== id);
+    saveLocalCache(); render(); updatePendingUI();
+    showToast('Movimiento eliminado');
+    return true;
+  }
+  const res = await api('deleteTransaccion', { id }, 12000);
+  if (!res.ok) {
+    showToast(res.network ? 'Sin señal: eliminar un movimiento ya guardado necesita conexión.' : 'Error: ' + res.error);
+    return false;
+  }
   STATE.transactions = STATE.transactions.filter((t) => t.id !== id);
   render();
   showToast('Movimiento eliminado');
@@ -322,7 +504,11 @@ async function deleteCategoria(tipo, id) {
    opId es fijo por captura: si se reintenta, el servidor no lo aplica dos veces.
    Devuelve true/false para que la UI deje reintentar si falla. */
 async function cajaOperar(op) {
-  const res = await api('cajaMovimiento', op);
+  const res = await api('cajaMovimiento', op, 15000);
+  if (!res.ok && res.network) {
+    showToast('Sin señal: la caja chica necesita conexión. Toca Reintentar (no se duplicará).');
+    return false;
+  }
   if (!res.ok || !res.data || res.data.error) {
     showToast('Error: ' + ((res.data && res.data.error) || res.error || 'desconocido'));
     return false;
@@ -590,9 +776,13 @@ function render() {
   saveLocalCache(); // respalda el estado actual para la próxima vez que abras sin buena señal
 }
 function renderHeader() {
+  const pend = PENDING.length
+    ? `<button class="fin-refresh-btn" style="width:auto;padding:0 10px;border-radius:15px;font-size:12px;font-weight:700;" title="Movimientos pendientes de sincronizar" onclick="openPendingModal()">${PENDING.some((q) => q.error) ? '⚠️' : '⏳'} ${PENDING.length}</button>`
+    : '';
   return `<div class="fin-header">
     <span>💰 Finanzas Personales</span>
-    <div style="display:flex;gap:8px;">
+    <div style="display:flex;gap:8px;align-items:center;">
+      ${pend}
       <button class="fin-refresh-btn" title="Cerrar sesión en este dispositivo" onclick="cerrarSesion()">🔒</button>
       <button class="fin-refresh-btn" title="Actualizar app" onclick="location.href = location.pathname + '?v=' + Date.now();">🔄</button>
     </div>
@@ -717,7 +907,7 @@ function renderSaldo() {
       <div class="fin-txleft">
         <div class="fin-txic" style="background:${c ? c.color : '#9aa79e'}">${iconEmoji(c ? c.icon : '')}</div>
         <div>
-          <div class="fin-txname">${escapeHtml(c ? c.nombre : 'Sin categoría')}</div>
+          <div class="fin-txname">${escapeHtml(c ? c.nombre : 'Sin categoría')}${pendBadge(t.id)}</div>
           ${t.nota ? `<div class="fin-txnote">Nota: ${escapeHtml(t.nota)}</div>` : ''}
         </div>
       </div>
@@ -788,7 +978,7 @@ function refreshCatDetail() {
   const rows = txs.map((t) => `
     <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:11px 0;border-bottom:1px solid #eef1ee;">
       <div style="min-width:0;">
-        <div class="fin-txname">${fullDateLabel(t.fecha)}</div>
+        <div class="fin-txname">${fullDateLabel(t.fecha)}${pendBadge(t.id)}</div>
         ${t.nota ? `<div class="fin-txnote" style="overflow-wrap:anywhere;">Nota: ${escapeHtml(t.nota)}</div>` : ''}
       </div>
       <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
@@ -1119,4 +1309,7 @@ function renderReportes() {
 }
 
 /* ---------------- arranque ---------------- */
+window.addEventListener('online', () => { syncQueue(); });
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') syncQueue(); });
+setInterval(() => { if (PENDING.length && document.visibilityState !== 'hidden') syncQueue(); }, 30000);
 loadAll();
