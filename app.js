@@ -83,7 +83,7 @@ let STATE = {
   loaded: false, mainTab: 'saldo', secTab: null, month: ymKey(new Date()), selectedDay: todayISO(), statsPeriod: 'mes',
 };
 let catFormTipo = 'gasto', catFormIcon = ICON_KEYS[0], catFormColor = COLORS[0], catFormNombreDraft = '', catEditingId = null;
-let uiCajaEditMoneda = null, uiCajaMoveModal = null;
+let uiCajaEditMoneda = null, uiCajaMoveModal = null, uiCajaEditOpId = null;
 let repMoneda = 'MXN', repHistMeses = 6, repProjMeses = 3, repYear = null;
 let trendChartInstance = null;
 
@@ -116,6 +116,22 @@ async function api(action, payload, timeoutMs) {
 }
 
 function normalizeTx(t) { return Object.assign({}, t, { monto: Number(t.monto) }); }
+
+/* ID único generado en el teléfono: se asigna al abrir la captura y se reutiliza
+   en cualquier reintento, así el backend puede detectar si ya lo guardó. */
+function genId() {
+  try { if (window.crypto && crypto.randomUUID) return crypto.randomUUID(); } catch (e) {}
+  return 'c-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+}
+/* Quita registros repetidos por id (red de seguridad al pintar). */
+function dedupeById(list) {
+  const seen = new Set();
+  return (list || []).filter((x) => {
+    if (!x || !x.id) return true;
+    if (seen.has(x.id)) return false;
+    seen.add(x.id); return true;
+  });
+}
 function normalizeLog(l) { return Object.assign({}, l, { delta: Number(l.delta), resultante: Number(l.resultante) }); }
 
 /* ---------------- caché local (respaldo sin conexión) ---------------- */
@@ -144,11 +160,11 @@ async function loadAll() {
   //    (así la app "abre" al toque aunque la red esté lenta o caída).
   const cached = loadLocalCache();
   if (cached) {
-    STATE.transactions = (cached.transactions || []).map(normalizeTx);
+    STATE.transactions = dedupeById((cached.transactions || []).map(normalizeTx));
     STATE.catIngreso = cached.catIngreso || [];
     STATE.catGasto = cached.catGasto || [];
     STATE.caja = cached.caja || { mxn: 0, usd: 0 };
-    STATE.cajaLog = (cached.cajaLog || []).map(normalizeLog);
+    STATE.cajaLog = dedupeById((cached.cajaLog || []).map(normalizeLog));
     STATE.loaded = true;
     render();
     if (cached.savedAt) showToast('Mostrando datos guardados (' + fmtCacheTime(cached.savedAt) + ')');
@@ -166,11 +182,11 @@ async function loadAll() {
     }
     return;
   }
-  STATE.transactions = (res.data.transactions || []).map(normalizeTx);
+  STATE.transactions = dedupeById((res.data.transactions || []).map(normalizeTx));
   STATE.catIngreso = res.data.catIngreso || [];
   STATE.catGasto = res.data.catGasto || [];
   STATE.caja = res.data.caja || { mxn: 0, usd: 0 };
-  STATE.cajaLog = (res.data.cajaLog || []).map(normalizeLog);
+  STATE.cajaLog = dedupeById((res.data.cajaLog || []).map(normalizeLog));
   STATE.loaded = true;
   saveLocalCache();
   render();
@@ -187,18 +203,25 @@ function showToast(msg) {
 }
 
 /* ---------------- mutaciones ---------------- */
-async function saveTransaccion(tx) {
-  const action = tx.id ? 'updateTransaccion' : 'addTransaccion';
+// isNew = true: alta con id generado en el teléfono (tx.id ya viene lleno).
+// Devuelve true si se guardó, false si falló (para que el modal permita reintentar).
+async function saveTransaccion(tx, isNew) {
+  const action = isNew ? 'addTransaccion' : 'updateTransaccion';
   const res = await api(action, tx);
-  if (!res.ok) { showToast('Error: ' + res.error); return; }
-  if (tx.id) {
+  if (!res.ok) { showToast('Error: ' + res.error); return false; }
+  if (!isNew) {
     STATE.transactions = STATE.transactions.map((t) => (t.id === tx.id ? tx : t));
     showToast('Movimiento actualizado');
   } else {
-    STATE.transactions.unshift(Object.assign({}, tx, { id: res.data.id }));
+    const id = (res.data && res.data.id) || tx.id;
+    if (!STATE.transactions.some((t) => t.id === id)) {
+      STATE.transactions.unshift(Object.assign({}, tx, { id: id }));
+    }
     showToast(tx.tipo === 'ingreso' ? 'Ingreso guardado' : 'Gasto guardado');
   }
+  saveLocalCache();
   render();
+  return true;
 }
 
 async function deleteTransaccion(id) {
@@ -232,36 +255,37 @@ async function deleteCategoria(tipo, id) {
   render();
 }
 
-async function cajaAjustar(moneda, nuevoValor, nota) {
-  const key = moneda.toLowerCase();
-  const anterior = STATE.caja[key] || 0;
-  const delta = nuevoValor - anterior;
-  const payload = { mxn: moneda === 'MXN' ? nuevoValor : STATE.caja.mxn, usd: moneda === 'USD' ? nuevoValor : STATE.caja.usd };
-  const res = await api('setCaja', payload);
-  if (!res.ok) { showToast('Error: ' + res.error); return; }
-  STATE.caja[key] = nuevoValor;
-  const logPayload = { fecha: todayISO(), moneda, tipo: 'ajuste', delta, resultante: nuevoValor, nota: nota || 'Ajuste manual del saldo' };
-  const logRes = await api('addCajaLog', logPayload);
-  STATE.cajaLog.unshift(Object.assign({ id: logRes.data ? logRes.data.id : null }, logPayload));
-  uiCajaEditMoneda = null;
+/* Movimiento de caja en UNA sola solicitud: el servidor lee el saldo real,
+   aplica el movimiento, guarda saldo + historial juntos y devuelve el saldo final.
+   opId es fijo por captura: si se reintenta, el servidor no lo aplica dos veces.
+   Devuelve true/false para que la UI deje reintentar si falla. */
+async function cajaOperar(op) {
+  const res = await api('cajaMovimiento', op);
+  if (!res.ok || !res.data || res.data.error) {
+    showToast('Error: ' + ((res.data && res.data.error) || res.error || 'desconocido'));
+    return false;
+  }
+  const d = res.data;
+  if (d.caja) STATE.caja = { mxn: Number(d.caja.mxn) || 0, usd: Number(d.caja.usd) || 0 };
+  if (d.log && !STATE.cajaLog.some((l) => l.id === d.log.id)) STATE.cajaLog.unshift(normalizeLog(d.log));
+  saveLocalCache();
+  return true;
+}
+async function cajaAjustar(moneda, nuevoValor, nota, opId) {
+  const ok = await cajaOperar({ id: opId, fecha: todayISO(), moneda, tipo: 'ajuste', valor: nuevoValor, nota: nota || 'Ajuste manual del saldo' });
+  if (!ok) return false;
+  uiCajaEditMoneda = null; uiCajaEditOpId = null;
   render();
   showToast('Saldo actualizado');
+  return true;
 }
-async function cajaMover(moneda, tipo, monto, nota) {
-  const key = moneda.toLowerCase();
-  const anterior = STATE.caja[key] || 0;
-  const delta = tipo === 'deposito' ? monto : -monto;
-  const nuevo = anterior + delta;
-  const payload = { mxn: moneda === 'MXN' ? nuevo : STATE.caja.mxn, usd: moneda === 'USD' ? nuevo : STATE.caja.usd };
-  const res = await api('setCaja', payload);
-  if (!res.ok) { showToast('Error: ' + res.error); return; }
-  STATE.caja[key] = nuevo;
-  const logPayload = { fecha: todayISO(), moneda, tipo, delta, resultante: nuevo, nota: nota || '' };
-  const logRes = await api('addCajaLog', logPayload);
-  STATE.cajaLog.unshift(Object.assign({ id: logRes.data ? logRes.data.id : null }, logPayload));
+async function cajaMover(moneda, tipo, monto, nota, opId) {
+  const ok = await cajaOperar({ id: opId, fecha: todayISO(), moneda, tipo, monto, nota: nota || '' });
+  if (!ok) return false;
   uiCajaMoveModal = null;
   render();
   showToast(tipo === 'deposito' ? 'Depósito registrado' : 'Retiro registrado');
+  return true;
 }
 
 /* ---------------- navegación ---------------- */
@@ -345,17 +369,18 @@ async function submitEditCategoria() {
 }
 
 /* ---------------- caja chica: UI ---------------- */
-function openCajaEdit(moneda) { uiCajaEditMoneda = moneda; uiCajaMoveModal = null; render(); }
-function cancelCajaEdit() { uiCajaEditMoneda = null; render(); }
+function openCajaEdit(moneda) { uiCajaEditMoneda = moneda; uiCajaEditOpId = genId(); uiCajaMoveModal = null; render(); }
+function cancelCajaEdit() { uiCajaEditMoneda = null; uiCajaEditOpId = null; render(); }
 async function confirmCajaEdit(btn) {
   if (btn && btn.disabled) return;
   const v = parseFloat(document.getElementById('cajaEditValor').value);
   const nota = document.getElementById('cajaEditNota').value;
   if (isNaN(v)) return;
   if (btn) { btn.disabled = true; btn.textContent = 'Guardando...'; }
-  await cajaAjustar(uiCajaEditMoneda, v, nota);
+  const ok = await cajaAjustar(uiCajaEditMoneda, v, nota, uiCajaEditOpId);
+  if (!ok && btn) { btn.disabled = false; btn.textContent = 'Reintentar'; } // mismo opId en el reintento
 }
-function openCajaMove(moneda, tipo) { uiCajaMoveModal = { moneda, tipo }; uiCajaEditMoneda = null; render(); }
+function openCajaMove(moneda, tipo) { uiCajaMoveModal = { moneda, tipo, opId: genId() }; uiCajaEditMoneda = null; render(); }
 function cancelCajaMove() { uiCajaMoveModal = null; render(); }
 async function confirmCajaMove(btn) {
   if (btn && btn.disabled) return;
@@ -363,7 +388,8 @@ async function confirmCajaMove(btn) {
   const nota = document.getElementById('cajaMoveNota').value;
   if (!m || m <= 0) return;
   if (btn) { btn.disabled = true; btn.textContent = 'Guardando...'; }
-  await cajaMover(uiCajaMoveModal.moneda, uiCajaMoveModal.tipo, m, nota);
+  const ok = await cajaMover(uiCajaMoveModal.moneda, uiCajaMoveModal.tipo, m, nota, uiCajaMoveModal.opId);
+  if (!ok && btn) { btn.disabled = false; btn.textContent = 'Reintentar'; } // mismo opId en el reintento
 }
 
 /* ---------------- reportes: UI ---------------- */
@@ -385,6 +411,8 @@ function openTxModal(tipo, existingId) {
   };
   let showPicker = false;
   let submitting = false;
+  const isNew = !existing;
+  const pendingId = isNew ? genId() : null; // mismo id en todos los reintentos de esta captura
 
   const overlay = document.createElement('div');
   overlay.className = 'fin-modal-overlay';
@@ -448,8 +476,13 @@ function openTxModal(tipo, existingId) {
         btn.disabled = true;
         btn.textContent = 'Guardando...';
         btn.style.opacity = '0.7';
-        await saveTransaccion({ id: draft.id, tipo: draft.tipo, monto: m, moneda: draft.moneda, fecha: draft.fecha, categoriaId: draft.categoriaId, nota: draft.nota });
-        close();
+        const ok = await saveTransaccion({ id: isNew ? pendingId : draft.id, tipo: draft.tipo, monto: m, moneda: draft.moneda, fecha: draft.fecha, categoriaId: draft.categoriaId, nota: draft.nota }, isNew);
+        if (ok) { close(); return; }
+        // Falló (o no llegó la respuesta): el modal se queda abierto con los mismos datos.
+        // Reintentar usa el MISMO id, así que si el primer envío sí se guardó, no se duplica.
+        submitting = false;
+        const b = document.getElementById('modalSave');
+        if (b) { b.disabled = false; b.textContent = 'Reintentar'; b.style.opacity = '1'; }
       };
     } else {
       overlay.innerHTML = `
