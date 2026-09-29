@@ -81,6 +81,7 @@ const COLORS = ['#5AC8FA', '#FF6FA5', '#5ED9C4', '#FF7F6B', '#8BD46E', '#B6E85A'
 /* ---------------- estado ---------------- */
 let STATE = {
   transactions: [], catIngreso: [], catGasto: [], caja: { mxn: 0, usd: 0 }, cajaLog: [],
+  presupuestos: [], config: {},
   loaded: false, mainTab: 'saldo', secTab: null, month: ymKey(new Date()), selectedDay: todayISO(), statsPeriod: 'mes',
 };
 let catFormTipo = 'gasto', catFormIcon = ICON_KEYS[0], catFormColor = COLORS[0], catFormNombreDraft = '', catEditingId = null;
@@ -139,6 +140,7 @@ function cerrarSesion() {
   try { localStorage.removeItem(CACHE_KEY); } catch (e) { /* nada */ }
   STATE.loaded = false;
   STATE.transactions = []; STATE.catIngreso = []; STATE.catGasto = []; STATE.cajaLog = [];
+  STATE.presupuestos = []; STATE.config = {};
   STATE.caja = { mxn: 0, usd: 0 };
   showTokenScreen();
 }
@@ -202,7 +204,7 @@ function saveLocalCache() {
   try {
     const snapshot = {
       transactions: STATE.transactions, catIngreso: STATE.catIngreso, catGasto: STATE.catGasto,
-      caja: STATE.caja, cajaLog: STATE.cajaLog, savedAt: Date.now(),
+      caja: STATE.caja, cajaLog: STATE.cajaLog, presupuestos: STATE.presupuestos, config: STATE.config, savedAt: Date.now(),
     };
     localStorage.setItem(CACHE_KEY, JSON.stringify(snapshot));
   } catch (e) { /* si localStorage falla (modo privado, cuota, etc.) simplemente no hay respaldo */ }
@@ -370,6 +372,8 @@ async function loadAll() {
     STATE.catGasto = cached.catGasto || [];
     STATE.caja = cached.caja || { mxn: 0, usd: 0 };
     STATE.cajaLog = dedupeById((cached.cajaLog || []).map(normalizeLog));
+    STATE.presupuestos = normPresupuestos(cached.presupuestos);
+    STATE.config = cached.config || {};
     mergePendingIntoState();
     STATE.loaded = true;
     render();
@@ -394,6 +398,8 @@ async function loadAll() {
   STATE.catGasto = res.data.catGasto || [];
   STATE.caja = res.data.caja || { mxn: 0, usd: 0 };
   STATE.cajaLog = dedupeById((res.data.cajaLog || []).map(normalizeLog));
+  STATE.presupuestos = normPresupuestos(res.data.presupuestos);
+  STATE.config = res.data.config || {};
   mergePendingIntoState(); // lo que aún no llega al Sheet se sigue viendo
   STATE.loaded = true;
   saveLocalCache();
@@ -496,6 +502,11 @@ async function deleteCategoria(tipo, id) {
   if (!res.ok) { showToast('Error: ' + res.error); return; }
   if (tipo === 'ingreso') STATE.catIngreso = STATE.catIngreso.filter((c) => c.id !== id);
   else STATE.catGasto = STATE.catGasto.filter((c) => c.id !== id);
+  if (tipo === 'gasto' && getBudget(id) > 0) { // no dejar presupuestos huérfanos en el Sheet
+    STATE.presupuestos = STATE.presupuestos.filter((b) => String(b.id) !== String(id));
+    api('setPresupuesto', { id: id, monto: 0 }, 12000);
+  }
+  saveLocalCache();
   render();
 }
 
@@ -934,6 +945,96 @@ function renderSaldo() {
   return html;
 }
 
+/* ---------------- presupuestos y gasto fijo / variable ---------------- */
+function normPresupuestos(list) {
+  return (list || []).map((b) => ({ id: String(b.id), monto: Number(b.monto) || 0 })).filter((b) => b.monto > 0);
+}
+function getBudget(id) {
+  const b = (STATE.presupuestos || []).find((x) => String(x.id) === String(id));
+  return b ? Number(b.monto) || 0 : 0;
+}
+function budgetColor(pct) { return pct >= 100 ? '#c0392b' : pct >= 80 ? '#e08e19' : '#2f9e44'; } // verde < 80 % · ámbar 80-99 % · rojo ≥ 100 %
+function budgetMeter(usado, presup) {
+  const pct = presup > 0 ? (usado / presup) * 100 : 0;
+  const col = budgetColor(pct);
+  const resta = presup - usado;
+  const msg = resta >= 0 ? 'Quedan ' + fmt(resta) : 'Te pasaste por ' + fmt(-resta);
+  return `<div style="margin-top:6px;">
+    <div style="display:flex;justify-content:space-between;font-size:11px;color:#5c6b62;margin-bottom:2px;">
+      <span>Presupuesto ${fmt(presup)}</span><span class="fin-num" style="color:${col};font-weight:700;">${pct.toFixed(0)}%</span>
+    </div>
+    <div style="background:#eef1ee;border-radius:4px;height:6px;overflow:hidden;"><div style="width:${Math.min(pct, 100)}%;height:100%;background:${col};"></div></div>
+    <div class="fin-num" style="font-size:10.5px;color:${col};margin-top:2px;">${msg}</div>
+  </div>`;
+}
+function openBudgetEdit(id) {
+  if (document.getElementById('budgetOverlay')) return;
+  const esTotal = id === 'TOTAL';
+  const cat = STATE.catGasto.find((c) => String(c.id) === String(id));
+  if (!esTotal && !cat) return;
+  const cur = getBudget(id);
+  const o = document.createElement('div');
+  o.id = 'budgetOverlay'; o.className = 'fin-modal-overlay'; o.style.zIndex = '80';
+  o.innerHTML = `<div class="fin-modal">
+    <div class="fin-modal-head" style="background:#233029;">
+      <div>
+        <div style="font-weight:700;font-size:15px;">Presupuesto mensual</div>
+        <div style="font-size:12px;opacity:.85;">${esTotal ? 'Total de gastos' : escapeHtml(cat.nombre)}</div>
+      </div>
+      <button onclick="closeBudgetEdit()" style="background:transparent;border:none;color:#fff;cursor:pointer;font-size:18px;">✕</button>
+    </div>
+    <div class="fin-modal-body">
+      <input id="budgetInput" class="fin-input fin-num" type="number" inputmode="decimal" min="0" step="0.01" placeholder="0.00" value="${cur > 0 ? cur : ''}" style="font-size:20px;font-weight:700;text-align:center;" />
+      <div style="font-size:12px;color:#8a978f;margin-top:10px;">En pesos (MXN). Aplica cada mes hasta que lo cambies. Déjalo vacío y guarda para quitarlo.</div>
+    </div>
+    <div class="fin-modal-foot">
+      <button onclick="closeBudgetEdit()">Cancelar</button>
+      <button class="save" id="budgetSaveBtn" onclick="submitBudget('${id}')">Guardar</button>
+    </div>
+  </div>`;
+  document.body.appendChild(o);
+  const inp = document.getElementById('budgetInput');
+  if (inp) setTimeout(() => { try { inp.focus(); } catch (e) { /* nada */ } }, 50);
+}
+function closeBudgetEdit() { const o = document.getElementById('budgetOverlay'); if (o) o.remove(); }
+let budgetSaving = false;
+async function submitBudget(id) {
+  if (budgetSaving) return;
+  const inp = document.getElementById('budgetInput');
+  const btn = document.getElementById('budgetSaveBtn');
+  const raw = String(inp ? inp.value : '').trim();
+  const monto = raw === '' ? 0 : parseFloat(raw);
+  if (isNaN(monto) || monto < 0) { showToast('Escribe un monto válido'); return; }
+  budgetSaving = true;
+  if (btn) { btn.disabled = true; btn.textContent = 'Guardando...'; }
+  const res = await api('setPresupuesto', { id: id, monto: monto }, 12000); // es un "upsert": reintentar no duplica
+  budgetSaving = false;
+  const fail = (m) => { showToast(m); if (btn) { btn.disabled = false; btn.textContent = 'Guardar'; } };
+  if (!res.ok) { fail(res.network ? 'Sin señal: el presupuesto necesita conexión. Intenta de nuevo.' : 'Error: ' + res.error); return; }
+  if (res.data && res.data.error) { fail('Error: ' + res.data.error); return; }
+  STATE.presupuestos = STATE.presupuestos.filter((b) => String(b.id) !== String(id));
+  if (monto > 0) STATE.presupuestos.push({ id: String(id), monto: Number(res.data && res.data.monto) || monto });
+  saveLocalCache();
+  closeBudgetEdit();
+  render();
+  refreshCatDetail(); // si el desglose está abierto, se actualiza con el presupuesto nuevo
+  showToast(monto > 0 ? 'Presupuesto guardado' : 'Presupuesto quitado');
+}
+
+function esFijo(cat) { return !!cat && String(cat.tipoGasto || '').toLowerCase() === 'fijo'; }
+async function toggleTipoGasto(id) {
+  const cat = STATE.catGasto.find((c) => String(c.id) === String(id));
+  if (!cat) return;
+  const nuevo = esFijo(cat) ? 'variable' : 'fijo';
+  const res = await api('updateCategoria', { tipo: 'gasto', id: cat.id, nombre: cat.nombre, icon: cat.icon, color: cat.color, tipoGasto: nuevo }, 12000);
+  if (!res.ok) { showToast(res.network ? 'Sin señal: este cambio necesita conexión.' : 'Error: ' + res.error); return; }
+  if (res.data && res.data.error) { showToast('Error: ' + res.data.error + ' (recarga con 🔄)'); return; }
+  cat.tipoGasto = nuevo;
+  saveLocalCache();
+  render();
+  showToast(nuevo === 'fijo' ? cat.nombre + ': gasto fijo' : cat.nombre + ': gasto variable');
+}
+
 /* ---------------- desglose de una categoría (modal) ---------------- */
 let catDetail = null; // { tipo, catId } — el contenido se recalcula de STATE cada vez que se refresca
 function fullDateLabel(iso) {
@@ -964,6 +1065,21 @@ function refreshCatDetail() {
   const usd = txs.filter((t) => t.moneda === 'USD');
   const totalMxn = mxn.reduce((s, t) => s + Number(t.monto), 0);
   const totalUsd = usd.reduce((s, t) => s + Number(t.monto), 0);
+
+  let budgetBlock = '';
+  if (tipo === 'gasto' && cat) {
+    const presup = getBudget(catId);
+    const esMes = STATE.statsPeriod === 'mes';
+    budgetBlock = `<div id="catDetailBudget" style="padding:12px 18px 0;">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <span class="fin-label">Presupuesto mensual</span>
+        <button class="fin-btn outline" style="padding:5px 10px;font-size:12px;" onclick="openBudgetEdit('${catId}')">${presup > 0 ? 'Editar' : '+ Fijar'}</button>
+      </div>
+      ${presup > 0
+        ? (esMes ? budgetMeter(totalMxn, presup) : `<div style="font-size:12px;color:#5c6b62;margin-top:4px;">${fmt(presup)} al mes · el avance se mide en la vista Mes</div>`)
+        : '<div style="font-size:12px;color:#8a978f;margin-top:4px;">Sin presupuesto</div>'}
+    </div>`;
+  }
 
   let overlay = document.getElementById('catDetailOverlay');
   if (!overlay) {
@@ -1000,6 +1116,7 @@ function refreshCatDetail() {
         </div>
         <button onclick="closeCatDetail()" style="background:transparent;border:none;color:#fff;cursor:pointer;font-size:18px;">✕</button>
       </div>
+      ${budgetBlock}
       <div class="fin-modal-body" id="catDetailBody" style="padding-top:14px;max-height:60vh;overflow:auto;">
         <div style="margin-bottom:6px;">
           <div class="fin-label">Total ${tipo === 'ingreso' ? 'ingresos' : 'gastos'}</div>
@@ -1043,6 +1160,19 @@ function renderCategoriaBars(tipo) {
 
   const periodTx = getPeriodTx(tipo).filter((t) => t.moneda !== 'USD');
   const periodTotal = periodTx.reduce((s, t) => s + Number(t.monto), 0);
+  let totalBudgetHtml = '';
+  if (tipo === 'gasto') {
+    const presT = getBudget('TOTAL');
+    totalBudgetHtml = `<div style="margin-top:10px;padding-top:10px;border-top:1px dashed #d7ded7;">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <span class="fin-label">Presupuesto total del mes</span>
+        <button class="fin-btn outline" style="padding:5px 10px;font-size:12px;" onclick="openBudgetEdit('TOTAL')">${presT > 0 ? 'Editar' : '+ Fijar'}</button>
+      </div>
+      ${presT > 0
+        ? (STATE.statsPeriod === 'mes' ? budgetMeter(periodTotal, presT) : `<div style="font-size:12px;color:#5c6b62;margin-top:4px;">${fmt(presT)} al mes · el avance se mide en la vista Mes</div>`)
+        : '<div style="font-size:12px;color:#8a978f;margin-top:4px;">Sin presupuesto total</div>'}
+    </div>`;
+  }
   html += `<div class="fin-card">
     <div class="fin-label" style="margin-bottom:8px;">Total de ${tipo === 'ingreso' ? 'ingresos' : 'gastos'} · ${periodLabel()}</div>
     <div style="display:flex;gap:6px;margin-bottom:10px;">
@@ -1052,6 +1182,7 @@ function renderCategoriaBars(tipo) {
     </div>
     <div class="fin-value" style="color:${colorMain}">${fmt(periodTotal)}</div>
     <div style="font-size:11.5px;color:#8a978f;margin-top:3px;">${periodTx.length} ${periodTx.length === 1 ? 'movimiento' : 'movimientos'}</div>
+    ${totalBudgetHtml}
   </div>`;
 
   html += `<div class="fin-card"><div class="fin-label" style="margin-bottom:8px;">Distribución por categoría · ${periodLabel()} <span style="text-transform:none;letter-spacing:0;font-weight:600;">(toca una categoría para ver el detalle)</span></div>`;
@@ -1060,11 +1191,13 @@ function renderCategoriaBars(tipo) {
   } else {
     byCat.forEach(({ id, monto, cat }) => {
       const pct = total ? (monto / total) * 100 : 0;
+      const presup = (tipo === 'gasto' && STATE.statsPeriod === 'mes' && cat) ? getBudget(id) : 0;
       html += `<div class="fin-bar-row" style="cursor:pointer;" onclick="openCatDetail('${tipo}','${id}')">
         <div class="fin-bar-ic" style="background:${cat ? cat.color : '#9aa79e'}">${iconEmoji(cat ? cat.icon : '')}</div>
         <div class="fin-bar-track">
           <div class="fin-bar-name"><span>${escapeHtml(cat ? cat.nombre : 'Sin categoría')}</span><span class="fin-num">${fmt(monto)}</span></div>
           <div class="fin-bar-bg"><div class="fin-bar-fill" style="width:${Math.max(pct, 6)}%;background:${cat ? cat.color : '#9aa79e'}">${pct.toFixed(1)}%</div></div>
+          ${presup > 0 ? budgetMeter(monto, presup) : ''}
         </div>
         <span style="color:#9aa79e;font-size:20px;line-height:1;">›</span>
       </div>`;
@@ -1117,16 +1250,26 @@ function renderCategorias() {
   if (cats.length === 0) html += '<div class="fin-empty">Aún no creas ninguna.</div>';
   cats.forEach((c) => {
     const usage = STATE.transactions.filter((t) => t.tipo === catFormTipo && t.categoriaId === c.id).length;
-    html += `<div class="cat-row">
-      <div style="display:flex;align-items:center;gap:10px;">
-        <div class="fin-txic" style="background:${c.color}">${iconEmoji(c.icon)}</div>
-        <span style="font-weight:600;font-size:13.5px;">${escapeHtml(c.nombre)}</span>
-        <span style="font-size:11.5px;color:#8a978f;">${usage} mov.</span>
+    const presup = getBudget(c.id);
+    const extra = catFormTipo === 'gasto'
+      ? `<div style="display:flex;gap:6px;margin:0 0 9px 44px;">
+          <button class="fin-secbtn" style="flex:none;padding:5px 10px;font-size:11px;${esFijo(c) ? 'background:#233029;color:#fff;border-color:#233029;' : ''}" onclick="toggleTipoGasto('${c.id}')">${esFijo(c) ? '📌 Fijo' : '🔀 Variable'}</button>
+          <button class="fin-secbtn" style="flex:none;padding:5px 10px;font-size:11px;" onclick="openBudgetEdit('${c.id}')">${presup > 0 ? '💰 ' + fmt(presup) + '/mes' : '+ Presupuesto'}</button>
+        </div>`
+      : '';
+    html += `<div style="border-bottom:1px solid #f2f4f2;">
+      <div class="cat-row" style="border-bottom:none;">
+        <div style="display:flex;align-items:center;gap:10px;">
+          <div class="fin-txic" style="background:${c.color}">${iconEmoji(c.icon)}</div>
+          <span style="font-weight:600;font-size:13.5px;">${escapeHtml(c.nombre)}</span>
+          <span style="font-size:11.5px;color:#8a978f;">${usage} mov.</span>
+        </div>
+        <div style="display:flex;gap:4px;">
+          <button class="fin-btn outline" style="padding:6px 8px;" onclick="startEditCategoria('${catFormTipo}','${c.id}')">✎</button>
+          <button class="fin-btn ghost" onclick="deleteCategoria('${catFormTipo}','${c.id}')">🗑</button>
+        </div>
       </div>
-      <div style="display:flex;gap:4px;">
-        <button class="fin-btn outline" style="padding:6px 8px;" onclick="startEditCategoria('${catFormTipo}','${c.id}')">✎</button>
-        <button class="fin-btn ghost" onclick="deleteCategoria('${catFormTipo}','${c.id}')">🗑</button>
-      </div>
+      ${extra}
     </div>`;
   });
   html += '</div>';
