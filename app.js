@@ -209,6 +209,7 @@ async function saveTransaccion(tx, isNew) {
   const action = isNew ? 'addTransaccion' : 'updateTransaccion';
   const res = await api(action, tx);
   if (!res.ok) { showToast('Error: ' + res.error); return false; }
+  if (!isNew && res.data && res.data.error) { showToast('Error: ' + res.data.error + ' (recarga con 🔄)'); return false; }
   if (!isNew) {
     STATE.transactions = STATE.transactions.map((t) => (t.id === tx.id ? tx : t));
     showToast('Movimiento actualizado');
@@ -225,12 +226,13 @@ async function saveTransaccion(tx, isNew) {
 }
 
 async function deleteTransaccion(id) {
-  if (!confirm('¿Eliminar este movimiento?')) return;
+  if (!confirm('¿Eliminar este movimiento?')) return false;
   const res = await api('deleteTransaccion', { id });
-  if (!res.ok) { showToast('Error: ' + res.error); return; }
+  if (!res.ok) { showToast('Error: ' + res.error); return false; }
   STATE.transactions = STATE.transactions.filter((t) => t.id !== id);
   render();
   showToast('Movimiento eliminado');
+  return true;
 }
 
 async function addCategoria(tipo, nombre, icon, color) {
@@ -399,7 +401,7 @@ function setRepHist(v) { repHistMeses = Number(v); render(); }
 function setRepProj(v) { repProjMeses = Number(v); render(); }
 
 /* ---------------- modal transacción ---------------- */
-function openTxModal(tipo, existingId) {
+function openTxModal(tipo, existingId, opts) {
   if (window.__txModalOpen) return; // evita abrir dos modales si se toca dos veces rápido
   window.__txModalOpen = true;
   const cats = tipo === 'ingreso' ? STATE.catIngreso : STATE.catGasto;
@@ -417,7 +419,14 @@ function openTxModal(tipo, existingId) {
   const overlay = document.createElement('div');
   overlay.className = 'fin-modal-overlay';
   document.body.appendChild(overlay);
-  function close() { window.__txModalOpen = false; if (overlay.parentNode) document.body.removeChild(overlay); }
+  let closed = false;
+  function close() {
+    if (closed) return;
+    closed = true;
+    window.__txModalOpen = false;
+    if (overlay.parentNode) document.body.removeChild(overlay);
+    if (opts && typeof opts.onClose === 'function') opts.onClose(); // p. ej. refrescar el desglose de categoría
+  }
 
   function paint() {
     const headerColor = tipo === 'ingreso' ? '#2f9e44' : '#c0392b';
@@ -427,7 +436,7 @@ function openTxModal(tipo, existingId) {
         <div class="fin-modal">
           <div class="fin-modal-head" style="background:${headerColor}">
             <div>
-              <div style="font-weight:700;font-size:15px;">${tipo === 'ingreso' ? 'Nuevo ingreso' : 'Nuevo gasto'}</div>
+              <div style="font-weight:700;font-size:15px;">${existing ? (tipo === 'ingreso' ? 'Editar ingreso' : 'Editar gasto') : (tipo === 'ingreso' ? 'Nuevo ingreso' : 'Nuevo gasto')}</div>
               <div style="font-size:12px;opacity:.85;">${draft.fecha}</div>
             </div>
             <button id="modalCloseX" style="background:transparent;border:none;color:#fff;cursor:pointer;font-size:18px;">✕</button>
@@ -672,12 +681,103 @@ function renderSaldo() {
   return html;
 }
 
+/* ---------------- desglose de una categoría (modal) ---------------- */
+let catDetail = null; // { tipo, catId } — el contenido se recalcula de STATE cada vez que se refresca
+function fullDateLabel(iso) {
+  const [y, m, d] = String(iso).slice(0, 10).split('-').map(Number);
+  const dow = DOW[(new Date(y, m - 1, d).getDay() + 6) % 7];
+  return `${dow} ${d} ${MONTHS_SHORT[m - 1]} ${y}`;
+}
+function openCatDetail(tipo, catId) { catDetail = { tipo: tipo, catId: String(catId) }; refreshCatDetail(); }
+function closeCatDetail() {
+  catDetail = null;
+  const o = document.getElementById('catDetailOverlay');
+  if (o) o.remove();
+}
+function refreshCatDetail() {
+  if (!catDetail) return;
+  const { tipo, catId } = catDetail;
+  const cats = tipo === 'ingreso' ? STATE.catIngreso : STATE.catGasto;
+  const cat = cats.find((c) => String(c.id) === catId);
+  const txs = getPeriodTx(tipo)
+    .filter((t) => String(t.categoriaId) === catId)
+    .sort((a, b) => (fechaKey(a.fecha) < fechaKey(b.fecha) ? 1 : fechaKey(a.fecha) > fechaKey(b.fecha) ? -1 : 0));
+  if (txs.length === 0) { closeCatDetail(); return; } // se editó/borró el último movimiento del periodo
+
+  const color = cat ? cat.color : '#9aa79e';
+  const colorMain = tipo === 'ingreso' ? '#2f9e44' : '#c0392b';
+  const sign = tipo === 'ingreso' ? '+ ' : '- ';
+  const mxn = txs.filter((t) => t.moneda !== 'USD');
+  const usd = txs.filter((t) => t.moneda === 'USD');
+  const totalMxn = mxn.reduce((s, t) => s + Number(t.monto), 0);
+  const totalUsd = usd.reduce((s, t) => s + Number(t.monto), 0);
+
+  let overlay = document.getElementById('catDetailOverlay');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'catDetailOverlay';
+    overlay.className = 'fin-modal-overlay';
+    document.body.appendChild(overlay);
+  }
+  const oldBody = document.getElementById('catDetailBody');
+  const scrollTop = oldBody ? oldBody.scrollTop : 0;
+
+  const rows = txs.map((t) => `
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:11px 0;border-bottom:1px solid #eef1ee;">
+      <div style="min-width:0;">
+        <div class="fin-txname">${fullDateLabel(t.fecha)}</div>
+        ${t.nota ? `<div class="fin-txnote" style="overflow-wrap:anywhere;">Nota: ${escapeHtml(t.nota)}</div>` : ''}
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
+        <span class="fin-num" style="font-weight:700;color:${colorMain};">${sign}${fmt(t.monto, t.moneda)}</span>
+        <button class="fin-btn outline" style="padding:6px;" onclick="editFromCatDetail('${t.id}')" title="Editar">✎</button>
+        <button class="fin-btn ghost" onclick="deleteFromCatDetail('${t.id}')" title="Eliminar">🗑</button>
+      </div>
+    </div>`).join('');
+
+  overlay.innerHTML = `
+    <div class="fin-modal">
+      <div class="fin-modal-head" style="background:${color}">
+        <div style="display:flex;align-items:center;gap:10px;min-width:0;">
+          <span style="font-size:22px;">${iconEmoji(cat ? cat.icon : '')}</span>
+          <div style="min-width:0;">
+            <div style="font-weight:700;font-size:15px;">${escapeHtml(cat ? cat.nombre : 'Sin categoría')}</div>
+            <div style="font-size:12px;opacity:.9;">${periodLabel()}</div>
+          </div>
+        </div>
+        <button onclick="closeCatDetail()" style="background:transparent;border:none;color:#fff;cursor:pointer;font-size:18px;">✕</button>
+      </div>
+      <div class="fin-modal-body" id="catDetailBody" style="padding-top:14px;max-height:60vh;overflow:auto;">
+        <div style="margin-bottom:6px;">
+          <div class="fin-label">Total ${tipo === 'ingreso' ? 'ingresos' : 'gastos'}</div>
+          <div class="fin-value fin-num" style="color:${colorMain};">${fmt(totalMxn)}</div>
+          ${usd.length ? `<div class="fin-num" style="font-weight:700;color:${colorMain};margin-top:2px;">${fmt(totalUsd, 'USD')} <span style="font-size:11.5px;color:#8a978f;font-weight:600;">(aparte, en dólares)</span></div>` : ''}
+          <div style="font-size:11.5px;color:#8a978f;margin-top:3px;">${txs.length} ${txs.length === 1 ? 'movimiento' : 'movimientos'}</div>
+        </div>
+        ${rows}
+      </div>
+      <div class="fin-modal-foot"><button onclick="closeCatDetail()">Cerrar</button></div>
+    </div>`;
+  const newBody = document.getElementById('catDetailBody');
+  if (newBody) newBody.scrollTop = scrollTop;
+}
+function editFromCatDetail(id) {
+  const t = STATE.transactions.find((x) => x.id === id);
+  if (!t) return;
+  // El desglose queda debajo; al cerrar el editor se recalcula con los datos ya corregidos.
+  openTxModal(t.tipo, id, { onClose: refreshCatDetail });
+}
+async function deleteFromCatDetail(id) {
+  const ok = await deleteTransaccion(id);
+  if (ok) refreshCatDetail();
+}
+
 /* ---------------- vista ingresos/gastos por categoría ---------------- */
 function renderCategoriaBars(tipo) {
   const cats = tipo === 'ingreso' ? STATE.catIngreso : STATE.catGasto;
-  const monthTx = getMonthTx();
-  const relevant = monthTx.filter((t) => t.tipo === tipo && t.moneda !== 'USD');
-  const usd = monthTx.filter((t) => t.tipo === tipo && t.moneda === 'USD');
+  const allPeriodTx = getPeriodTx(tipo); // mismo periodo que la tarjeta de total (semana / mes / año)
+  const relevant = allPeriodTx.filter((t) => t.moneda !== 'USD');
+  const usd = allPeriodTx.filter((t) => t.moneda === 'USD');
   const total = relevant.reduce((s, t) => s + Number(t.monto), 0);
   const map = {};
   relevant.forEach((t) => { map[t.categoriaId] = (map[t.categoriaId] || 0) + Number(t.monto); });
@@ -701,28 +801,29 @@ function renderCategoriaBars(tipo) {
     <div style="font-size:11.5px;color:#8a978f;margin-top:3px;">${periodTx.length} ${periodTx.length === 1 ? 'movimiento' : 'movimientos'}</div>
   </div>`;
 
-  html += `<div class="fin-card"><div class="fin-label" style="margin-bottom:8px;">Distribución por categoría · ${tipo === 'ingreso' ? 'ingresos' : 'gastos'} del mes</div>`;
+  html += `<div class="fin-card"><div class="fin-label" style="margin-bottom:8px;">Distribución por categoría · ${periodLabel()} <span style="text-transform:none;letter-spacing:0;font-weight:600;">(toca una categoría para ver el detalle)</span></div>`;
   if (byCat.length === 0) {
-    html += `<div class="fin-empty">Este mes aún no hay transacciones de ${tipo === 'ingreso' ? 'ingresos' : 'gastos'}. En cuanto empieces a añadir, este gráfico estará disponible con los detalles resumidos.</div>`;
+    html += `<div class="fin-empty">En este periodo aún no hay transacciones de ${tipo === 'ingreso' ? 'ingresos' : 'gastos'}. En cuanto empieces a añadir, este gráfico estará disponible con los detalles resumidos.</div>`;
   } else {
-    byCat.forEach(({ monto, cat }) => {
+    byCat.forEach(({ id, monto, cat }) => {
       const pct = total ? (monto / total) * 100 : 0;
-      html += `<div class="fin-bar-row">
+      html += `<div class="fin-bar-row" style="cursor:pointer;" onclick="openCatDetail('${tipo}','${id}')">
         <div class="fin-bar-ic" style="background:${cat ? cat.color : '#9aa79e'}">${iconEmoji(cat ? cat.icon : '')}</div>
         <div class="fin-bar-track">
           <div class="fin-bar-name"><span>${escapeHtml(cat ? cat.nombre : 'Sin categoría')}</span><span class="fin-num">${fmt(monto)}</span></div>
           <div class="fin-bar-bg"><div class="fin-bar-fill" style="width:${Math.max(pct, 6)}%;background:${cat ? cat.color : '#9aa79e'}">${pct.toFixed(1)}%</div></div>
         </div>
+        <span style="color:#9aa79e;font-size:20px;line-height:1;">›</span>
       </div>`;
     });
   }
   html += '</div>';
 
   if (usd.length > 0) {
-    html += '<div class="fin-card"><div class="fin-label" style="margin-bottom:8px;">En dólares (USD) este mes</div>';
+    html += '<div class="fin-card"><div class="fin-label" style="margin-bottom:8px;">En dólares (USD) · ' + periodLabel() + '</div>';
     usd.forEach((t) => {
       const c = cats.find((x) => x.id === t.categoriaId);
-      html += `<div style="display:flex;justify-content:space-between;padding:6px 0;font-size:13.5px;">
+      html += `<div style="display:flex;justify-content:space-between;padding:6px 0;font-size:13.5px;cursor:pointer;" onclick="openCatDetail('${tipo}','${t.categoriaId}')">
         <span>${escapeHtml(c ? c.nombre : 'Sin categoría')}${t.nota ? ' — ' + escapeHtml(t.nota) : ''}</span>
         <span class="fin-num" style="font-weight:700;">${fmt(t.monto, 'USD')}</span>
       </div>`;
